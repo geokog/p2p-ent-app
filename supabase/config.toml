@@ -1,0 +1,15 @@
+# Supabase CLI — https://supabase.com/docs/guides/cli/config
+# Use with: npx supabase login && npx supabase link --project-ref YOUR_REF && npx supabase db push
+
+project_id = "workflow-template"
+
+[api]
+enabled = true
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+
+[db]
+major_version = 15
+
+[db.pooler]
+enabled = false

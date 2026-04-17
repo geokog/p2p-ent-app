@@ -1,0 +1,50 @@
+{
+  "name": "workflow-template",
+  "version": "0.1.0",
+  "description": "A production-ready template for building workflow management applications with Next.js, Supabase, and Kognitos English-as-Code business logic.",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "dev:restart": "bash scripts/dev-restart.sh",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "seed": "npx tsx scripts/seed.ts",
+    "refresh:run-payloads": "npx tsx scripts/refresh-kognitos-run-payloads.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.52.0",
+    "@supabase/ssr": "^0.8.0",
+    "@supabase/supabase-js": "^2.98.0",
+    "@tanstack/react-table": "^8.21.3",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "cmdk": "^1.1.1",
+    "date-fns": "^4.1.0",
+    "lucide-react": "^0.575.0",
+    "next": "16.1.6",
+    "radix-ui": "^1.4.3",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-markdown": "^10.1.0",
+    "recharts": "^3.7.0",
+    "remark-gfm": "^4.0.1",
+    "server-only": "^0.0.1",
+    "tailwind-merge": "^3.5.0",
+    "zustand": "^5.0.11"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "dotenv": "^17.3.1",
+    "eslint": "^9",
+    "eslint-config-next": "16.1.6",
+    "shadcn": "^3.8.5",
+    "tailwindcss": "^4",
+    "tsx": "^4.21.0",
+    "tw-animate-css": "^1.4.0",
+    "typescript": "^5"
+  }
+}
