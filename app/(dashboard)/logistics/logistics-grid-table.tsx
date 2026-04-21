@@ -213,7 +213,7 @@ export function LogisticsGridTable() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Logistics</h1>
         <p className="text-muted-foreground">
-          Outbound and trailer movements (sample static data for layout review).
+          Outbound and trailer movements.
         </p>
       </div>
 
@@ -221,12 +221,8 @@ export function LogisticsGridTable() {
         <CardHeader>
           <CardTitle>Outbound shipments</CardTitle>
           <CardDescription>
-            Edits are saved automatically to the database (debounced). Requires
-            Supabase and a deployed{" "}
-            <code className="rounded bg-muted px-1 py-0.5 text-xs">
-              logistics_grid_state
-            </code>{" "}
-            migration.
+            Carrier, trailer, and dispatch status. Edits are saved automatically to
+            the database.
           </CardDescription>
           {loadError ? (
             <p className="text-sm text-destructive">
