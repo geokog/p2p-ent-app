@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
 import {
   Card,
@@ -24,6 +24,10 @@ import {
   type LogisticsRow,
   type LogisticsTri,
 } from "./logistics-static-data";
+import {
+  loadLogisticsRowsFromStorage,
+  saveLogisticsRowsToStorage,
+} from "./logistics-storage";
 
 function triToCellValue(t: LogisticsTri): string {
   if (t === null) return "";
@@ -99,10 +103,26 @@ export function LogisticsGridTable() {
     LOGISTICS_ROWS.map((r) => ({ ...r })),
   );
 
+  useEffect(() => {
+    const stored = loadLogisticsRowsFromStorage();
+    if (stored) setRows(stored);
+  }, []);
+
   function patchRow(index: number, patch: Partial<LogisticsRow>) {
     setRows((prev) =>
       prev.map((r, i) => (i === index ? { ...r, ...patch } : r)),
     );
+  }
+
+  /** Outbound ID is persisted to localStorage on every change (auto-save). */
+  function patchOutboundId(index: number, outboundId: string) {
+    setRows((prev) => {
+      const next = prev.map((r, i) =>
+        i === index ? { ...r, outboundId } : r,
+      );
+      saveLogisticsRowsToStorage(next);
+      return next;
+    });
   }
 
   return (
@@ -118,7 +138,8 @@ export function LogisticsGridTable() {
         <CardHeader>
           <CardTitle>Outbound shipments</CardTitle>
           <CardDescription>
-            Carrier, trailer, and dispatch status. Values shown are placeholders.
+            Carrier, trailer, and dispatch status. Outbound ID edits save
+            automatically in this browser.
           </CardDescription>
         </CardHeader>
         <CardContent className="px-0 pb-4">
@@ -230,7 +251,7 @@ export function LogisticsGridTable() {
                   const oid = row.outboundId;
                   return (
                     <TableRow
-                      key={oid}
+                      key={i}
                       role="row"
                       data-row={String(rowNum)}
                       className={cn(i % 2 === 1 && "bg-muted/40")}
@@ -256,9 +277,16 @@ export function LogisticsGridTable() {
                             data-outbound-id={oid}
                             id={`cell-${field}-${rowNum}`}
                             value={row[field]}
-                            onChange={(e) =>
-                              patchRow(i, { [field]: e.target.value } as Partial<LogisticsRow>)
-                            }
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              if (field === "outboundId") {
+                                patchOutboundId(i, v);
+                                return;
+                              }
+                              patchRow(i, {
+                                [field]: v,
+                              } as Partial<LogisticsRow>);
+                            }}
                           />
                         </TableCell>
                       ))}
