@@ -23,21 +23,34 @@ import type {
 import { cn } from "@/lib/utils";
 
 const ISSUE_BADGE_LABEL: Record<ExpertQueueIssueBadge, string> = {
-  po_not_found: "PO Not Found",
+  po_not_found: "Missing Details",
   posting_date: "Posting Date",
   book: "Book",
+  missing_invoice_number: "Missing Invoice Number",
+  missing_po_number: "Missing PO Number",
   missing_details: "Missing Details",
+  sap_permissions_required: "SAP Permissions Required",
+  invalid_po_format: "Invalid PO Format",
   other: "Other",
 };
 
+const MISSING_DETAILS_BADGE_CLASS =
+  "border-amber-500/40 bg-amber-500/10 text-amber-950 dark:border-amber-400/35 dark:bg-amber-950/40 dark:text-amber-100";
+
 const ISSUE_BADGE_CLASS: Record<ExpertQueueIssueBadge, string> = {
-  po_not_found:
-    "border-violet-500/40 bg-violet-500/10 text-violet-950 dark:border-violet-400/35 dark:bg-violet-950/40 dark:text-violet-100",
+  po_not_found: MISSING_DETAILS_BADGE_CLASS,
   posting_date:
     "border-sky-500/40 bg-sky-500/10 text-sky-950 dark:border-sky-400/35 dark:bg-sky-950/40 dark:text-sky-100",
   book: "border-emerald-500/40 bg-emerald-500/10 text-emerald-950 dark:border-emerald-400/35 dark:bg-emerald-950/40 dark:text-emerald-100",
-  missing_details:
-    "border-amber-500/40 bg-amber-500/10 text-amber-950 dark:border-amber-400/35 dark:bg-amber-950/40 dark:text-amber-100",
+  missing_invoice_number:
+    "border-cyan-600/35 bg-cyan-500/10 text-cyan-950 dark:border-cyan-400/35 dark:bg-cyan-950/45 dark:text-cyan-100",
+  missing_po_number:
+    "border-rose-500/40 bg-rose-500/10 text-rose-950 dark:border-rose-400/35 dark:bg-rose-950/40 dark:text-rose-100",
+  missing_details: MISSING_DETAILS_BADGE_CLASS,
+  sap_permissions_required:
+    "border-purple-600/35 bg-purple-500/10 text-purple-950 dark:border-purple-400/35 dark:bg-purple-950/45 dark:text-purple-100",
+  invalid_po_format:
+    "border-orange-600/35 bg-orange-500/10 text-orange-950 dark:border-orange-400/35 dark:bg-orange-950/40 dark:text-orange-100",
   other:
     "border-muted-foreground/30 bg-muted/40 text-muted-foreground dark:bg-muted/25",
 };
@@ -96,11 +109,8 @@ export default function ExpertQueuePage() {
           Expert Queue
         </h1>
         <p className="mt-1 text-muted-foreground">
-          Runs that did not complete because they{" "}
-          <strong className="font-medium text-foreground">failed</strong> or are{" "}
-          <strong className="font-medium text-foreground">awaiting guidance</strong>{" "}
-          in Kognitos. Use the state, reason, and steps below to move each run toward
-          completion.
+          Items in the Expert Queue are ready for review and resolution. Use the
+          explanation below to help each run move successfully toward completion.
         </p>
       </div>
 
@@ -191,9 +201,6 @@ export default function ExpertQueuePage() {
                   </p>
                   <p className="text-xs text-muted-foreground">
                     Last updated: {item.updateTime ?? item.createTime ?? "—"}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    Run reference: {item.runId}
                   </p>
                 </CardDescription>
               </div>

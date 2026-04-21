@@ -183,6 +183,16 @@ export function summarizeBookInvokerSapPoFacetMaxlengthViolation(
   return `${SAP_PO_FACET_MAXLENGTH_HUMANIZED_PREFIX}. Shorten it and try again.`;
 }
 
+/** Humanized SAP PO facet / maxlength summary, or raw book-wrapped facet payload. */
+export function whySummaryIndicatesInvalidPoFormatSapFacet(
+  whySummary: string,
+): boolean {
+  if (whySummary.trim().startsWith(SAP_PO_FACET_MAXLENGTH_HUMANIZED_PREFIX)) {
+    return true;
+  }
+  return summarizeBookInvokerSapPoFacetMaxlengthViolation(whySummary) != null;
+}
+
 function humanizedIssueDescription(
   desc: string | undefined,
   fallback: string,
@@ -193,6 +203,7 @@ function humanizedIssueDescription(
     summarizeBookInvokerFileOrTextMismatch(desc) ??
     summarizeBookInvokerKeywordsMustBeStrings(desc) ??
     summarizeBookInvokerSapPoFacetMaxlengthViolation(desc) ??
+    summarizeVendorInvoiceMissingFromExtraction(desc) ??
     desc
   );
 }
@@ -272,8 +283,8 @@ export function stateLabelForIssue(kind: ExpertQueueIssueKind): string {
 }
 
 /**
- * Expert Queue **PO Not Found** badge: the common empty-list index error
- * (`List index 0 out of range for list of length 0`).
+ * Expert Queue index-error pattern (`List index 0 out of range for list of length 0`).
+ * Shown in the UI with the **Missing Details** badge label.
  */
 export function whySummaryIndicatesPoNotFoundLabel(whySummary: string): boolean {
   const n = whySummary.trim().toLowerCase();
@@ -321,14 +332,109 @@ export function whySummaryIndicatesSapPoMissingDetails(
 }
 
 /**
+ * Book-wrapped SAP Gateway **403** on the Purchase Order OData service (CM_CONSUMER / no auth).
+ */
+export function whySummaryIndicatesSapPoServiceUnauthorized(
+  whySummary: string,
+): boolean {
+  const n = whySummary.toLowerCase();
+  if (
+    !n.includes("book invoker error") &&
+    !n.includes("book service error")
+  ) {
+    return false;
+  }
+  if (!n.includes("no authorization to access service")) return false;
+  if (
+    !n.includes("purchaseorder") &&
+    !n.includes("zapi_purchaseorder")
+  ) {
+    return false;
+  }
+  return n.includes("403") || n.includes("status code: 403");
+}
+
+/** Expert Queue explanation when the **Missing Invoice Number** badge applies. */
+export const MISSING_VENDOR_INVOICE_HUMANIZED_EXPLANATION =
+  "Could not find a vendor invoice number present for this entry.";
+
+/**
+ * Book extraction path: required **vendor invoice number** could not be read from the document.
+ */
+export function summarizeVendorInvoiceMissingFromExtraction(
+  text: string,
+): string | null {
+  const n = text.toLowerCase();
+  if (
+    !n.includes("book invoker error") &&
+    !n.includes("book service error")
+  ) {
+    return null;
+  }
+  const hasExtractionContext =
+    n.includes("extractionerror") ||
+    n.includes("unable to extract") ||
+    n.includes("could not find");
+  if (!hasExtractionContext) return null;
+  const hasVendorFieldIssue =
+    n.includes("could not find a vendor invoice number") ||
+    n.includes("could not find the vendor invoice number") ||
+    n.includes("'vendor_invoice_number'") ||
+    n.includes('"vendor_invoice_number"');
+  if (!hasVendorFieldIssue) return null;
+  return MISSING_VENDOR_INVOICE_HUMANIZED_EXPLANATION;
+}
+
+export function whySummaryIndicatesMissingVendorInvoiceNumberFromExtraction(
+  whySummary: string,
+): boolean {
+  if (whySummary.trim() === MISSING_VENDOR_INVOICE_HUMANIZED_EXPLANATION) {
+    return true;
+  }
+  return summarizeVendorInvoiceMissingFromExtraction(whySummary) !== null;
+}
+
+/**
+ * Book extraction path: required **`po_number`** could not be read from the document.
+ */
+export function whySummaryIndicatesMissingPoNumberFromExtraction(
+  whySummary: string,
+): boolean {
+  const n = whySummary.toLowerCase();
+  if (
+    !n.includes("book invoker error") &&
+    !n.includes("book service error")
+  ) {
+    return false;
+  }
+  if (!n.includes("po_number")) return false;
+  const hasExtractionContext =
+    n.includes("extractionerror") ||
+    n.includes("unable to extract") ||
+    n.includes("could not find");
+  if (!hasExtractionContext) return false;
+  return (
+    n.includes("could not find a po number") ||
+    n.includes("could not find the po number") ||
+    n.includes("'po_number'") ||
+    n.includes('"po_number"')
+  );
+}
+
+/**
  * Single category badge for Expert Queue cards. First matching rule wins
- * (PO Not Found → Posting Date → Book → Missing Details → Other).
+ * (index “empty list” → Missing Details label, Posting Date, Book, Missing Invoice Number,
+ * Missing PO Number, SAP Property None → Missing Details, SAP PO 403, Invalid PO Format, Other).
  */
 export type ExpertQueueIssueBadge =
   | "po_not_found"
   | "posting_date"
   | "book"
+  | "missing_invoice_number"
+  | "missing_po_number"
   | "missing_details"
+  | "sap_permissions_required"
+  | "invalid_po_format"
   | "other";
 
 export function expertQueueIssueBadgeFromWhySummary(
@@ -337,8 +443,20 @@ export function expertQueueIssueBadgeFromWhySummary(
   if (whySummaryIndicatesPoNotFoundLabel(whySummary)) return "po_not_found";
   if (whySummaryIndicatesPostingDateLabel(whySummary)) return "posting_date";
   if (whySummaryIndicatesBookInvokerKeywordsError(whySummary)) return "book";
+  if (whySummaryIndicatesMissingVendorInvoiceNumberFromExtraction(whySummary)) {
+    return "missing_invoice_number";
+  }
+  if (whySummaryIndicatesMissingPoNumberFromExtraction(whySummary)) {
+    return "missing_po_number";
+  }
   if (whySummaryIndicatesSapPoMissingDetails(whySummary)) {
     return "missing_details";
+  }
+  if (whySummaryIndicatesSapPoServiceUnauthorized(whySummary)) {
+    return "sap_permissions_required";
+  }
+  if (whySummaryIndicatesInvalidPoFormatSapFacet(whySummary)) {
+    return "invalid_po_format";
   }
   return "other";
 }
@@ -352,7 +470,7 @@ export type ExpertQueueRow = {
   /** Plain-language “why care” copy for the page (no technical jargon). */
   whyItMatters: string;
   whySummary: string;
-  /** One category label for the run (PO Not Found, Posting Date, Book, Missing Details, Other). */
+  /** One category label for the run (see `ExpertQueueIssueBadge`). */
   issueBadge: ExpertQueueIssueBadge;
   referenceId?: string;
   locationHint?: string;

@@ -13,6 +13,16 @@ import { supabaseAdmin } from "@/lib/supabase";
 
 const MAX_ROWS = 500;
 
+/** Newest first; missing timestamps sink to the bottom. */
+function compareExpertQueueRows(a: ExpertQueueRow, b: ExpertQueueRow): number {
+  const ta =
+    Date.parse(a.updateTime ?? a.createTime ?? "") || Number.NEGATIVE_INFINITY;
+  const tb =
+    Date.parse(b.updateTime ?? b.createTime ?? "") || Number.NEGATIVE_INFINITY;
+  if (tb !== ta) return tb - ta;
+  return b.runId.localeCompare(a.runId);
+}
+
 export async function GET() {
   if (!supabaseAdmin) {
     return NextResponse.json(
@@ -115,6 +125,8 @@ export async function GET() {
       createTime,
     });
   }
+
+  items.sort(compareExpertQueueRows);
 
   return NextResponse.json({ items });
 }
