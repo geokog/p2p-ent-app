@@ -11,6 +11,11 @@ import {
   payOkFromRecommendationText,
   readDeepExplicitOkFlags,
   readShallowExplicitOkFlags,
+  coaMatchExpectedActualFromPayload,
+  docMatchExpectedActualFromPayload,
+  qtyMatchExpectedActualFromPayload,
+  validationResultsValueMatchIndicatesFailure,
+  valueMatchExpectedActualFromPayload,
 } from "@/lib/kognitos/validation-from-automation-output";
 import { getRequestIdFromRunPayload } from "@/lib/kognitos/run-payload";
 import {
@@ -129,6 +134,18 @@ export interface KognitosDashboardRun {
   docOk: boolean;
   qtyOk: boolean;
   valOk: boolean;
+  /**
+   * When the payload contains a **Value Match** row (markdown or JSON), these are
+   * the Expected / Actual strings for hover on the VAL column; both null if unknown.
+   */
+  valMatchExpected: string | null;
+  valMatchActual: string | null;
+  qtyMatchExpected: string | null;
+  qtyMatchActual: string | null;
+  coaMatchExpected: string | null;
+  coaMatchActual: string | null;
+  docMatchExpected: string | null;
+  docMatchActual: string | null;
   coaOk: boolean;
   payOk: boolean;
   completedAt: string | null;
@@ -455,7 +472,10 @@ export function inferValidationChecks(
 
   const docOk = pick("docOk");
   const qtyOk = pick("qtyOk");
-  const valOk = pick("valOk");
+  let valOk = pick("valOk");
+  if (validationResultsValueMatchIndicatesFailure(payload)) {
+    valOk = false;
+  }
   const coaOk = pick("coaOk");
   const payOk = derivePayOkFromPreceding(
     payload,
@@ -699,6 +719,11 @@ export function normalizeKognitosRowForDashboard(row: {
   const pipeline = pipelineFromChecks(checks);
   const completedAt = kognitosRunCompletedAtIso(payload, updateIso);
 
+  const valueMatchCells = valueMatchExpectedActualFromPayload(payload);
+  const qtyMatchCells = qtyMatchExpectedActualFromPayload(payload);
+  const coaMatchCells = coaMatchExpectedActualFromPayload(payload);
+  const docMatchCells = docMatchExpectedActualFromPayload(payload);
+
   const valueFlat = valueFromPayload(payload);
   const valueDeep = deepMoneyHint(payload);
   const valueIdp = idpHints.totalAmount ?? 0;
@@ -719,6 +744,14 @@ export function normalizeKognitosRowForDashboard(row: {
     docOk: checks.docOk,
     qtyOk: checks.qtyOk,
     valOk: checks.valOk,
+    valMatchExpected: valueMatchCells ? valueMatchCells.expected : null,
+    valMatchActual: valueMatchCells ? valueMatchCells.actual : null,
+    qtyMatchExpected: qtyMatchCells ? qtyMatchCells.expected : null,
+    qtyMatchActual: qtyMatchCells ? qtyMatchCells.actual : null,
+    coaMatchExpected: coaMatchCells ? coaMatchCells.expected : null,
+    coaMatchActual: coaMatchCells ? coaMatchCells.actual : null,
+    docMatchExpected: docMatchCells ? docMatchCells.expected : null,
+    docMatchActual: docMatchCells ? docMatchCells.actual : null,
     coaOk: checks.coaOk,
     payOk: checks.payOk,
     completedAt,

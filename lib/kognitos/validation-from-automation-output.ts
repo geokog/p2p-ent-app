@@ -4,6 +4,12 @@
  * mismatch phrases — so dashboard tables match “pending on mismatch” intent.
  */
 
+import {
+  isMarkdownTableSeparatorRow,
+  markdownReportTextFromOutputs,
+  splitMarkdownTableCells,
+} from "@/lib/kognitos/markdown-report-supplier-invoice";
+
 type Dim = "docOk" | "qtyOk" | "valOk" | "coaOk" | "payOk";
 
 export type ValidationChecks = Record<Dim, boolean>;
@@ -14,6 +20,28 @@ function runStateObject(
   const st = payload.state;
   if (!st || typeof st !== "object" || Array.isArray(st)) return null;
   return st as Record<string, unknown>;
+}
+
+/** Same merge as `getMergedOutputsForPaymentText` in `normalize-dashboard-run` (avoid import cycle). */
+function mergedOutputsFromPayload(
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  const completed = runStateObject(payload)?.completed as
+    | Record<string, unknown>
+    | undefined;
+  const completedOut =
+    completed?.outputs &&
+    typeof completed.outputs === "object" &&
+    !Array.isArray(completed.outputs)
+      ? (completed.outputs as Record<string, unknown>)
+      : {};
+  const topOut =
+    payload.outputs &&
+    typeof payload.outputs === "object" &&
+    !Array.isArray(payload.outputs)
+      ? (payload.outputs as Record<string, unknown>)
+      : {};
+  return { ...topOut, ...completedOut };
 }
 
 function userInputsObject(
@@ -404,4 +432,540 @@ export function inferCoaQtyValFromAutomationOutput(
   else if (valProto !== undefined) out.valOk = valProto;
 
   return out;
+}
+
+/** `Validation Results`, `Validation Result`, `validation_results`, etc. */
+const VALIDATION_RESULTS_KEY_RE = /^validation[\s_]*results?$/i;
+
+const MAX_VALUE_MATCH_SCAN_NODES = 14_000;
+
+function normKeyLabel(key: string): string {
+  return key.replace(/[\s_-]+/g, "").toLowerCase();
+}
+
+/**
+ * Kognitos payloads often store table cells as protobuf-shaped objects, not plain
+ * strings. Walk a few common shapes so Expected/Actual are comparable.
+ */
+function coerceCellToComparableString(v: unknown, depth = 0): string | undefined {
+  if (depth > 10 || v == null) return undefined;
+  const flat = stringFromJsonValue(v);
+  if (flat && flat.trim()) return flat.trim();
+  if (typeof v === "number" && Number.isFinite(v)) return String(v);
+  if (typeof v === "boolean") return v ? "true" : "false";
+  if (typeof v !== "object" || Array.isArray(v)) return undefined;
+  const o = v as Record<string, unknown>;
+  for (const k of [
+    "stringValue",
+    "string_value",
+    "text",
+    "value",
+    "amount",
+    "display",
+    "formatted",
+    "number",
+    "raw",
+    "label",
+    "title",
+  ]) {
+    const inner = coerceCellToComparableString(o[k], depth + 1);
+    if (inner) return inner;
+  }
+  const sc = o.scalar;
+  if (typeof sc === "number" && Number.isFinite(sc)) return String(sc);
+  return undefined;
+}
+
+/** Case- / separator-insensitive lookup on a row object (flat or nested cell values). */
+function rowStringField(
+  row: Record<string, unknown>,
+  ...labels: string[]
+): string | undefined {
+  const want = new Set(labels.map(normKeyLabel));
+  for (const [k, v] of Object.entries(row)) {
+    if (!want.has(normKeyLabel(k))) continue;
+    const s = coerceCellToComparableString(v);
+    if (s) return s;
+  }
+  return undefined;
+}
+
+function rowCheckNameNormalized(row: Record<string, unknown>): string {
+  const name = rowStringField(
+    row,
+    "Check Name",
+    "check_name",
+    "checkName",
+    "CheckName",
+  );
+  return (name ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function rowIsValueMatchCheck(row: Record<string, unknown>): boolean {
+  const n = rowCheckNameNormalized(row);
+  if (!n) return false;
+  if (n === "value match") return true;
+  return /\bvalue\s*match\b/.test(n);
+}
+
+function rowIsQuantityMatchCheck(row: Record<string, unknown>): boolean {
+  const n = rowCheckNameNormalized(row);
+  if (!n) return false;
+  if (rowIsValueMatchCheck(row)) return false;
+  if (n === "quantity match" || n === "qty match") return true;
+  if (/\bquantity\s*match\b/.test(n)) return true;
+  if (/\bqty\s*match\b/.test(n)) return true;
+  if (/\bunit[s]?\s*match\b/.test(n)) return true;
+  if (/\bquantity\s*&\s*unit\s*match\b/.test(n)) return true;
+  if (/\bquantity\s+and\s+unit\s+match\b/.test(n)) return true;
+  if (/\bquantity\s+and\s+unit\s+validation\b/.test(n)) return true;
+  return false;
+}
+
+function rowIsCoaMatchCheck(row: Record<string, unknown>): boolean {
+  const n = rowCheckNameNormalized(row);
+  if (!n) return false;
+  if (/\bcoa\s*match\b/.test(n)) return true;
+  if (/\bcoa\s*validation\b/.test(n)) return true;
+  if (/\bcertificate\s+of\s+analysis\s+match\b/.test(n)) return true;
+  if (
+    n.includes("certificate of analysis") &&
+    /\b(match|validation|check|verify)\b/.test(n)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function rowIsDocumentMatchCheck(row: Record<string, unknown>): boolean {
+  const n = rowCheckNameNormalized(row);
+  if (!n) return false;
+  if (rowIsValueMatchCheck(row)) return false;
+  if (/\bdocument\s*match\b/.test(n)) return true;
+  if (/\bdocument\s*validation\b/.test(n)) return true;
+  if (/\binvoice\s*document\s*match\b/.test(n)) return true;
+  if (/\bpo\s*document\s*match\b/.test(n)) return true;
+  if (/\bdoc\s*match\b/.test(n)) return true;
+  if (
+    /\bsupplier\s*invoice\b/.test(n) &&
+    /\b(match|validation|id|number|document)\b/.test(n)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function normalizeComparableScalar(s: string): string {
+  return s
+    .trim()
+    .toLowerCase()
+    .replace(/\$/g, "")
+    .replace(/,/g, "")
+    .replace(/\s+/g, " ");
+}
+
+/** Compare currency / numeric-ish strings so `114,800` ≈ `114800` ≈ `$114800.00`. */
+function expectedActualSemanticallyEqual(a: string, b: string): boolean {
+  const na = normalizeComparableScalar(a);
+  const nb = normalizeComparableScalar(b);
+  if (na === nb) return true;
+  const digitsA = na.replace(/[^\d.-]/g, "");
+  const digitsB = nb.replace(/[^\d.-]/g, "");
+  if (!digitsA || !digitsB) return false;
+  const fa = parseFloat(digitsA);
+  const fb = parseFloat(digitsB);
+  if (!Number.isFinite(fa) || !Number.isFinite(fb)) return false;
+  return Math.abs(fa - fb) < 1e-6;
+}
+
+function valueMatchRowIndicatesFail(row: Record<string, unknown>): boolean {
+  const statusRaw = rowStringField(row, "Status", "status");
+  const statusVerdict =
+    statusRaw !== undefined
+      ? (boolOrPassFailFromValue(statusRaw) ??
+        passFailFromCell(statusRaw))
+      : undefined;
+
+  const expected = rowStringField(row, "Expected", "expected") ?? "";
+  const actual = rowStringField(row, "Actual", "actual") ?? "";
+  const valueMismatch =
+    expected.trim().length > 0 ||
+    actual.trim().length > 0
+      ? !expectedActualSemanticallyEqual(expected, actual)
+      : false;
+
+  if (statusVerdict === false) return true;
+  if (statusVerdict === true) return valueMismatch;
+  return valueMismatch;
+}
+
+function parseValidationResultsTableRows(v: unknown): unknown[] | null {
+  if (Array.isArray(v)) return v;
+  if (typeof v === "string") {
+    const t = v.trim();
+    if (t.length < 2) return null;
+    try {
+      const parsed = JSON.parse(t) as unknown;
+      if (Array.isArray(parsed)) return parsed;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const bag = parsed as Record<string, unknown>;
+        const inner = bag.rows ?? bag.items ?? bag.data ?? bag.results;
+        if (Array.isArray(inner)) return inner;
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+  if (v && typeof v === "object" && !Array.isArray(v)) {
+    const bag = v as Record<string, unknown>;
+    const inner = bag.rows ?? bag.items ?? bag.data ?? bag.results;
+    if (Array.isArray(inner)) return inner;
+  }
+  return null;
+}
+
+function collectValidationResultsArrays(
+  node: unknown,
+  depth: number,
+  out: unknown[][],
+): void {
+  if (depth > 28 || node == null) return;
+  if (typeof node !== "object") return;
+  if (Array.isArray(node)) {
+    for (const el of node) collectValidationResultsArrays(el, depth + 1, out);
+    return;
+  }
+  const o = node as Record<string, unknown>;
+  for (const [k, v] of Object.entries(o)) {
+    if (VALIDATION_RESULTS_KEY_RE.test(k.trim())) {
+      const rows = parseValidationResultsTableRows(v);
+      if (rows) out.push(rows);
+    }
+    collectValidationResultsArrays(v, depth + 1, out);
+  }
+}
+
+/**
+ * Some automations nest the same table rows without a parent key named
+ * "Validation Results". Scan modest-sized object arrays anywhere in the payload.
+ */
+function scanArraysForValueMatchFailure(
+  node: unknown,
+  depth: number,
+  budget: { n: number },
+): boolean {
+  if (budget.n++ > MAX_VALUE_MATCH_SCAN_NODES || depth > 30 || node == null) {
+    return false;
+  }
+  if (Array.isArray(node)) {
+    if (
+      node.length > 0 &&
+      node.length <= 400 &&
+      node.every((x) => x != null && typeof x === "object" && !Array.isArray(x))
+    ) {
+      for (const item of node) {
+        const row = item as Record<string, unknown>;
+        if (rowIsValueMatchCheck(row) && valueMatchRowIndicatesFail(row)) {
+          return true;
+        }
+      }
+    }
+    for (const el of node) {
+      if (scanArraysForValueMatchFailure(el, depth + 1, budget)) return true;
+    }
+    return false;
+  }
+  if (typeof node === "object") {
+    for (const v of Object.values(node as Record<string, unknown>)) {
+      if (scanArraysForValueMatchFailure(v, depth + 1, budget)) return true;
+    }
+  }
+  return false;
+}
+
+type MdValidationColMap = {
+  checkName: number;
+  expected?: number;
+  actual?: number;
+  status?: number;
+};
+
+function normalizeMarkdownTableCell(c: string): string {
+  return c.replace(/\*+/g, "").trim();
+}
+
+function tryParseValidationResultsMarkdownHeader(
+  cells: string[],
+): MdValidationColMap | null {
+  if (cells.length < 2) return null;
+  let checkIdx = -1;
+  let expectedIdx = -1;
+  let actualIdx = -1;
+  let statusIdx = -1;
+  for (let i = 0; i < cells.length; i++) {
+    const raw = normalizeMarkdownTableCell(cells[i] ?? "");
+    const c = raw.toLowerCase();
+    if (
+      checkIdx < 0 &&
+      (c === "check name" ||
+        c === "check_name" ||
+        c === "checkname" ||
+        /^check\s*name$/i.test(raw))
+    ) {
+      checkIdx = i;
+    }
+    if (expectedIdx < 0 && (c === "expected" || /^expected(\s+value)?$/i.test(raw))) {
+      expectedIdx = i;
+    }
+    if (actualIdx < 0 && (c === "actual" || /^actual(\s+value)?$/i.test(raw))) {
+      actualIdx = i;
+    }
+    if (statusIdx < 0 && (c === "status" || /^status$/i.test(raw))) {
+      statusIdx = i;
+    }
+  }
+  if (checkIdx < 0) return null;
+  if (expectedIdx < 0 && actualIdx < 0) return null;
+  const out: MdValidationColMap = { checkName: checkIdx };
+  if (expectedIdx >= 0) out.expected = expectedIdx;
+  if (actualIdx >= 0) out.actual = actualIdx;
+  if (statusIdx >= 0) out.status = statusIdx;
+  return out;
+}
+
+function syntheticRowFromMarkdownPipeCells(
+  cells: string[],
+  col: MdValidationColMap,
+): Record<string, unknown> {
+  const get = (i?: number) =>
+    i !== undefined && i >= 0 && i < cells.length
+      ? normalizeMarkdownTableCell(cells[i]!)
+      : "";
+  return {
+    "Check Name": get(col.checkName),
+    Expected: col.expected !== undefined ? get(col.expected) : "",
+    Actual: col.actual !== undefined ? get(col.actual) : "",
+    Status: col.status !== undefined ? get(col.status) : "",
+  };
+}
+
+/**
+ * SAP-style `markdown_report.text` often carries **Validation Results** as a pipe
+ * table (not JSON). Parse header row + body rows the same way as structured rows.
+ */
+function eachMarkdownValidationResultsRow(
+  markdown: string,
+  onRow: (row: Record<string, unknown>) => boolean,
+): boolean {
+  if (!markdown || typeof markdown !== "string") return false;
+  let colMap: MdValidationColMap | null = null;
+  for (const line of markdown.split(/\r?\n/)) {
+    const rawCells = splitMarkdownTableCells(line);
+    if (!rawCells) {
+      colMap = null;
+      continue;
+    }
+    if (isMarkdownTableSeparatorRow(rawCells)) continue;
+    if (rawCells.length < 2) continue;
+    if (!colMap) {
+      const next = tryParseValidationResultsMarkdownHeader(rawCells);
+      if (next) colMap = next;
+      continue;
+    }
+    const maybeNewHeader = tryParseValidationResultsMarkdownHeader(rawCells);
+    if (maybeNewHeader) {
+      colMap = maybeNewHeader;
+      continue;
+    }
+    const rowObj = syntheticRowFromMarkdownPipeCells(rawCells, colMap);
+    if (onRow(rowObj)) return true;
+  }
+  return false;
+}
+
+function valueMatchFailureFromMarkdownReportText(markdown: string): boolean {
+  return eachMarkdownValidationResultsRow(markdown, (rowObj) => {
+    return rowIsValueMatchCheck(rowObj) && valueMatchRowIndicatesFail(rowObj);
+  });
+}
+
+function gatherMarkdownTextsForValidationScan(
+  payload: Record<string, unknown>,
+): string[] {
+  const acc: string[] = [];
+  const seen = new Set<string>();
+  const push = (s?: string) => {
+    if (!s || typeof s !== "string") return;
+    const t = s.trim();
+    if (t.length < 40) return;
+    if (seen.has(t)) return;
+    seen.add(t);
+    acc.push(t);
+  };
+
+  push(markdownReportTextFromOutputs(mergedOutputsFromPayload(payload)));
+
+  const budget = { n: 0 };
+  const visit = (node: unknown, depth: number) => {
+    if (budget.n++ > 12_000 || depth > 26) return;
+    if (typeof node === "string") {
+      if (
+        node.length >= 80 &&
+        /\|/.test(node) &&
+        (/expected/i.test(node) || /actual/i.test(node)) &&
+        (/check\s*name/i.test(node) ||
+          /validation\s*results?/i.test(node) ||
+          /\b(value|quantity|qty|coa|document|supplier\s*invoice|certificate\s+of\s+analysis)\b/i.test(
+            node,
+          ))
+      ) {
+        push(node);
+      }
+      return;
+    }
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node)) {
+      for (const x of node) visit(x, depth + 1);
+      return;
+    }
+    for (const v of Object.values(node as Record<string, unknown>)) {
+      visit(v, depth + 1);
+    }
+  };
+  visit(payload, 0);
+  return acc;
+}
+
+/**
+ * When payload JSON includes a **Validation Results** table with a **Value Match**
+ * row where Status is Fail or Expected/Actual disagree, VAL must fail on the dashboard.
+ */
+export function validationResultsValueMatchIndicatesFailure(
+  payload: Record<string, unknown>,
+): boolean {
+  for (const md of gatherMarkdownTextsForValidationScan(payload)) {
+    if (valueMatchFailureFromMarkdownReportText(md)) return true;
+  }
+
+  const arrays: unknown[][] = [];
+  collectValidationResultsArrays(payload, 0, arrays);
+  for (const arr of arrays) {
+    for (const item of arr) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const row = item as Record<string, unknown>;
+      if (!rowIsValueMatchCheck(row)) continue;
+      if (valueMatchRowIndicatesFail(row)) return true;
+    }
+  }
+  const budget = { n: 0 };
+  if (scanArraysForValueMatchFailure(payload, 0, budget)) return true;
+  return false;
+}
+
+function scanArraysForFirstExpectedActualRow(
+  node: unknown,
+  depth: number,
+  budget: { n: number },
+  rowTest: (row: Record<string, unknown>) => boolean,
+): { expected: string; actual: string } | null {
+  if (budget.n++ > MAX_VALUE_MATCH_SCAN_NODES || depth > 30 || node == null) {
+    return null;
+  }
+  if (Array.isArray(node)) {
+    if (
+      node.length > 0 &&
+      node.length <= 400 &&
+      node.every((x) => x != null && typeof x === "object" && !Array.isArray(x))
+    ) {
+      for (const item of node) {
+        const row = item as Record<string, unknown>;
+        if (!rowTest(row)) continue;
+        const expected = rowStringField(row, "Expected", "expected") ?? "";
+        const actual = rowStringField(row, "Actual", "actual") ?? "";
+        if (expected.trim() || actual.trim()) {
+          return { expected: expected.trim(), actual: actual.trim() };
+        }
+      }
+    }
+    for (const el of node) {
+      const hit = scanArraysForFirstExpectedActualRow(el, depth + 1, budget, rowTest);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  if (typeof node === "object") {
+    for (const v of Object.values(node as Record<string, unknown>)) {
+      const hit = scanArraysForFirstExpectedActualRow(v, depth + 1, budget, rowTest);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+function firstExpectedActualForRowTest(
+  payload: Record<string, unknown>,
+  rowTest: (row: Record<string, unknown>) => boolean,
+): { expected: string; actual: string } | null {
+  for (const md of gatherMarkdownTextsForValidationScan(payload)) {
+    let found: { expected: string; actual: string } | null = null;
+    eachMarkdownValidationResultsRow(md, (rowObj) => {
+      if (!rowTest(rowObj)) return false;
+      const expected = rowStringField(rowObj, "Expected", "expected") ?? "";
+      const actual = rowStringField(rowObj, "Actual", "actual") ?? "";
+      if (!expected.trim() && !actual.trim()) return false;
+      found = { expected: expected.trim(), actual: actual.trim() };
+      return true;
+    });
+    if (found) return found;
+  }
+
+  const arrays: unknown[][] = [];
+  collectValidationResultsArrays(payload, 0, arrays);
+  for (const arr of arrays) {
+    for (const item of arr) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const row = item as Record<string, unknown>;
+      if (!rowTest(row)) continue;
+      const expected = rowStringField(row, "Expected", "expected") ?? "";
+      const actual = rowStringField(row, "Actual", "actual") ?? "";
+      if (expected.trim() || actual.trim()) {
+        return { expected: expected.trim(), actual: actual.trim() };
+      }
+    }
+  }
+
+  const budget = { n: 0 };
+  return scanArraysForFirstExpectedActualRow(payload, 0, budget, rowTest);
+}
+
+/**
+ * Reads the **Value Match** row’s Expected / Actual strings from markdown reports
+ * or structured validation tables in the run payload (same sources as VAL failure detection).
+ */
+export function valueMatchExpectedActualFromPayload(
+  payload: Record<string, unknown>,
+): { expected: string; actual: string } | null {
+  return firstExpectedActualForRowTest(payload, rowIsValueMatchCheck);
+}
+
+/** Quantity / unit style checks in **Validation Results** (markdown or JSON). */
+export function qtyMatchExpectedActualFromPayload(
+  payload: Record<string, unknown>,
+): { expected: string; actual: string } | null {
+  return firstExpectedActualForRowTest(payload, rowIsQuantityMatchCheck);
+}
+
+/** COA style checks in **Validation Results** (markdown or JSON). */
+export function coaMatchExpectedActualFromPayload(
+  payload: Record<string, unknown>,
+): { expected: string; actual: string } | null {
+  return firstExpectedActualForRowTest(payload, rowIsCoaMatchCheck);
+}
+
+/** Document / supplier-invoice style checks in **Validation Results** (markdown or JSON). */
+export function docMatchExpectedActualFromPayload(
+  payload: Record<string, unknown>,
+): { expected: string; actual: string } | null {
+  return firstExpectedActualForRowTest(payload, rowIsDocumentMatchCheck);
 }

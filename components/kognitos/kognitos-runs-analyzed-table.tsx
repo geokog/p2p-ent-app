@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import { format } from "date-fns";
 import {
@@ -47,6 +47,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { KognitosRunResultsDialog } from "@/components/kognitos/kognitos-run-results-dialog";
 import {
   Tooltip,
   TooltipContent,
@@ -70,33 +71,115 @@ const cellPrimary =
   "align-top text-[15px] font-normal leading-snug tracking-[-0.01em] text-foreground";
 const cellTabular = cn(cellPrimary, "tabular-nums");
 
+function SectionLabel({ children }: { children: ReactNode }) {
+  return (
+    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+      {children}
+    </p>
+  );
+}
+
+function FourWayMatchPill({ code, ok }: { code: string; ok: boolean }) {
+  return (
+    <div className="flex items-center justify-between rounded-lg border border-border bg-muted/35 px-3 py-2.5">
+      <span className="text-sm font-medium text-muted-foreground">{code}</span>
+      <span className="text-sm font-semibold text-foreground">
+        {ok ? "Pass" : "Fail"}
+      </span>
+    </div>
+  );
+}
+
+/** Same primary + hover for both CTAs; ghost variant avoids default `Button` primary hover fighting these colors. */
+const reanalyzeCtaClass =
+  "h-9 gap-2 rounded-md border-0 bg-[#2E966C] px-4 text-sm font-medium text-white shadow-none " +
+  "transition-colors hover:bg-[#27805f] hover:text-white active:bg-[#236350] active:text-white " +
+  "focus-visible:ring-2 focus-visible:ring-[#2E966C] focus-visible:ring-offset-2 focus-visible:outline-none " +
+  "cursor-pointer";
+
 export type RunsAnalyzedTab = "pending" | "processed" | "all";
 
 export type RunsAnalyzedSortKey = DashboardRunSortKey;
 
-function CheckCell({ ok }: { ok: boolean }) {
+function validationExpectedActualTooltip(
+  expectedCol: string | null,
+  actualCol: string | null,
+): ReactNode | undefined {
+  if (expectedCol === null) return undefined;
   return (
-    <TableCell className="px-1 text-center" aria-label={ok ? "Pass" : "Fail"}>
+    <div className="space-y-1.5 tabular-nums">
+      <div>
+        <span className="opacity-75">Expected: </span>
+        <span className="font-medium">{expectedCol || "—"}</span>
+      </div>
+      <div>
+        <span className="opacity-75">Actual: </span>
+        <span className="font-medium">{actualCol || "—"}</span>
+      </div>
+    </div>
+  );
+}
+
+function CheckCell({
+  ok,
+  code,
+  onOpenResults,
+  tooltip,
+}: {
+  ok: boolean;
+  code: string;
+  onOpenResults: () => void;
+  /** Optional hover content (e.g. VAL expected vs actual). */
+  tooltip?: ReactNode;
+}) {
+  const label = `${code}: ${ok ? "Pass" : "Fail"}`;
+  const circle = ok
+    ? cn(
+        "border-emerald-200/80 bg-emerald-50/90 text-emerald-600",
+        "dark:border-emerald-800/50 dark:bg-emerald-950/35 dark:text-emerald-400/90",
+      )
+    : cn(
+        "border-rose-200/80 bg-rose-50/90 text-rose-600",
+        "dark:border-rose-900/45 dark:bg-rose-950/30 dark:text-rose-400/90",
+      );
+
+  const button = (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpenResults();
+      }}
+      className={cn(
+        "mx-auto flex size-7 items-center justify-center rounded-full border transition-opacity",
+        "hover:opacity-90",
+        "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+        circle,
+      )}
+      aria-label={`${label}. Open run results report.`}
+    >
       {ok ? (
-        <span
-          className={cn(
-            "mx-auto flex size-7 items-center justify-center rounded-full border",
-            "border-emerald-200/80 bg-emerald-50/90 text-emerald-600",
-            "dark:border-emerald-800/50 dark:bg-emerald-950/35 dark:text-emerald-400/90",
-          )}
-        >
-          <Check className="size-3.5 stroke-[2]" aria-hidden />
-        </span>
+        <Check className="size-3.5 stroke-[2]" aria-hidden />
       ) : (
-        <span
-          className={cn(
-            "mx-auto flex size-7 items-center justify-center rounded-full border",
-            "border-rose-200/80 bg-rose-50/90 text-rose-600",
-            "dark:border-rose-900/45 dark:bg-rose-950/30 dark:text-rose-400/90",
-          )}
-        >
-          <X className="size-3.5 stroke-[2]" aria-hidden />
-        </span>
+        <X className="size-3.5 stroke-[2]" aria-hidden />
+      )}
+    </button>
+  );
+
+  return (
+    <TableCell className="px-1 text-center">
+      {tooltip != null ? (
+        <Tooltip>
+          <TooltipTrigger asChild>{button}</TooltipTrigger>
+          <TooltipContent
+            side="top"
+            className="max-w-xs text-left text-xs leading-snug"
+          >
+            {tooltip}
+          </TooltipContent>
+        </Tooltip>
+      ) : (
+        button
       )}
     </TableCell>
   );
@@ -239,6 +322,12 @@ export function KognitosRunsAnalyzedTable({
 }: KognitosRunsAnalyzedTableProps) {
   const [invoicePdfOpen, setInvoicePdfOpen] = useState(false);
   const [invoicePdfSrc, setInvoicePdfSrc] = useState<string | null>(null);
+  const [reanalyzeRun, setReanalyzeRun] = useState<KognitosDashboardRun | null>(
+    null,
+  );
+  const [runResultsRow, setRunResultsRow] = useState<KognitosDashboardRun | null>(
+    null,
+  );
   const embedded = surface === "plain";
 
   const main = (
@@ -478,11 +567,47 @@ export function KognitosRunsAnalyzedTable({
                               >
                                 {currencyFmt.format(row.value)}
                               </TableCell>
-                              <CheckCell ok={row.docOk} />
-                              <CheckCell ok={row.qtyOk} />
-                              <CheckCell ok={row.valOk} />
-                              <CheckCell ok={row.coaOk} />
-                              <CheckCell ok={row.payOk} />
+                              <CheckCell
+                                ok={row.docOk}
+                                code="DOC"
+                                onOpenResults={() => setRunResultsRow(row)}
+                                tooltip={validationExpectedActualTooltip(
+                                  row.docMatchExpected,
+                                  row.docMatchActual,
+                                )}
+                              />
+                              <CheckCell
+                                ok={row.qtyOk}
+                                code="QTY"
+                                onOpenResults={() => setRunResultsRow(row)}
+                                tooltip={validationExpectedActualTooltip(
+                                  row.qtyMatchExpected,
+                                  row.qtyMatchActual,
+                                )}
+                              />
+                              <CheckCell
+                                ok={row.valOk}
+                                code="VAL"
+                                onOpenResults={() => setRunResultsRow(row)}
+                                tooltip={validationExpectedActualTooltip(
+                                  row.valMatchExpected,
+                                  row.valMatchActual,
+                                )}
+                              />
+                              <CheckCell
+                                ok={row.coaOk}
+                                code="COA"
+                                onOpenResults={() => setRunResultsRow(row)}
+                                tooltip={validationExpectedActualTooltip(
+                                  row.coaMatchExpected,
+                                  row.coaMatchActual,
+                                )}
+                              />
+                              <CheckCell
+                                ok={row.payOk}
+                                code="PAY"
+                                onOpenResults={() => setRunResultsRow(row)}
+                              />
                               <TableCell className="align-top text-sm tabular-nums text-muted-foreground">
                                 {row.completedAt ? (
                                   <span className="inline-flex items-center gap-1.5">
@@ -545,8 +670,8 @@ export function KognitosRunsAnalyzedTable({
                                     size="icon"
                                     variant="outline"
                                     className="size-8 rounded-full"
-                                    aria-label="Run in Kognitos (placeholder)"
-                                    disabled
+                                    aria-label="Re-analyze in Kognitos"
+                                    onClick={() => setReanalyzeRun(row)}
                                   >
                                     <Play className="size-4" />
                                   </Button>
@@ -633,6 +758,108 @@ export function KognitosRunsAnalyzedTable({
         <Card className="gap-0 overflow-hidden py-0 shadow-sm">{main}</Card>
       )}
       <Dialog
+        open={reanalyzeRun != null}
+        onOpenChange={(open) => {
+          if (!open) setReanalyzeRun(null);
+        }}
+      >
+        <DialogContent
+          showCloseButton
+          className="gap-0 overflow-hidden p-0 sm:max-w-[520px]"
+        >
+          {reanalyzeRun ? (
+            <>
+              <DialogHeader className="space-y-2 border-b px-6 py-5 text-left">
+                <DialogTitle className="text-xl font-semibold tracking-tight">
+                  Re-analyze in Kognitos
+                </DialogTitle>
+                <DialogDescription className="text-sm leading-relaxed">
+                  Analysis summary for Invoice {reanalyzeRun.invoiceNumber} from{" "}
+                  {reanalyzeRun.vendor}..
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-5 px-6 py-5">
+                <div className="space-y-2">
+                  <SectionLabel>Invoice</SectionLabel>
+                  <div className="rounded-lg border border-border bg-background p-4 shadow-sm">
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div>
+                        <p className="text-xs text-muted-foreground">Vendor</p>
+                        <p className="mt-0.5 text-sm font-semibold text-foreground">
+                          {reanalyzeRun.vendor}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Invoice</p>
+                        <p className="mt-0.5 text-sm font-semibold tabular-nums text-foreground">
+                          {reanalyzeRun.invoiceNumber}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="mt-4 border-t border-border pt-4">
+                      <p className="text-xs text-muted-foreground">Value</p>
+                      <p className="mt-0.5 text-sm font-semibold tabular-nums text-foreground">
+                        {currencyFmt.format(reanalyzeRun.value)}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <SectionLabel>4-way match</SectionLabel>
+                  <div className="rounded-lg border border-border bg-background p-4 shadow-sm">
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <FourWayMatchPill code="DOC" ok={reanalyzeRun.docOk} />
+                      <FourWayMatchPill code="QTY" ok={reanalyzeRun.qtyOk} />
+                      <FourWayMatchPill code="VAL" ok={reanalyzeRun.valOk} />
+                      <FourWayMatchPill code="COA" ok={reanalyzeRun.coaOk} />
+                      <FourWayMatchPill code="PAY" ok={reanalyzeRun.payOk} />
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="flex flex-wrap justify-end gap-2 border-t bg-muted/30 px-6 py-4">
+                {reanalyzeRun.kognitosRunUrl?.trim() ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className={reanalyzeCtaClass}
+                    asChild
+                  >
+                    <a
+                      href={reanalyzeRun.kognitosRunUrl.trim()}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center justify-center no-underline"
+                    >
+                      <Play className="size-4 fill-current" aria-hidden />
+                      Analyze with same invoice
+                    </a>
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className={reanalyzeCtaClass}
+                  >
+                    <Play className="size-4 fill-current" aria-hidden />
+                    Analyze with same invoice
+                  </Button>
+                )}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className={reanalyzeCtaClass}
+                >
+                  <Play className="size-4 fill-current" aria-hidden />
+                  Analyze with new invoice
+                </Button>
+              </div>
+            </>
+          ) : null}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
         open={invoicePdfOpen}
         onOpenChange={(open) => {
           setInvoicePdfOpen(open);
@@ -660,6 +887,14 @@ export function KognitosRunsAnalyzedTable({
           </div>
         </DialogContent>
       </Dialog>
+
+      <KognitosRunResultsDialog
+        run={runResultsRow}
+        open={runResultsRow != null}
+        onOpenChange={(open) => {
+          if (!open) setRunResultsRow(null);
+        }}
+      />
     </TooltipProvider>
   );
 }

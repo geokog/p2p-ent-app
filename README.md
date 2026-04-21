@@ -150,6 +150,55 @@ This template is set up so you can treat Kognitos as the source of truth for aut
 - **`kognitos_runs`** stores each run’s **raw API JSON** (`payload` jsonb), matching ListRuns/GetRun shapes so fields like `user_inputs` / `userInputs` and nested `file` objects stay intact. The bundled [`lib/kognitos/openapi.yaml`](lib/kognitos/openapi.yaml) is the reference contract.
 - **`kognitos_run_inputs`** holds **denormalized rows** for file-shaped inputs (normalized file id, optional filename and `remote_raw`) so you can join and filter without parsing JSON everywhere. Rows are rebuilt whenever a new run is imported or when you run the payload refresh script.
 
+### Automation run outputs (retrieve for insights)
+
+Dashboard KPIs, **Runs analyzed**, **Expert Queue**, validation columns (DOC / QTY / VAL / COA / PAY), supplier-invoice IDs, and PDF links are all derived from **the same source of truth: the run’s full JSON**, not from a trimmed UI DTO. Treat **`kognitos_runs.payload`** as the canonical automation output when building or debugging insights.
+
+**What “output” means in the stored JSON**
+
+- **`user_inputs` / `userInputs`** — values and file refs the automation was invoked with (often includes nested `file` / protobuf-style scalars).
+- **`outputs`** (top-level on the run object) — automation-emitted fields when the platform surfaces them at the root.
+- **`state.completed.outputs`** — the usual place for **completed** automation products: status strings, `payment_recommendation`, explicit `*_ok` flags, **`markdown_report`** (SAP-style narrative + pipe tables such as **Validation Results** / **Value Match**), and any other keys your SOP writes. The sync stores the **entire** GetRun/ListRuns document in `payload`, so nothing is dropped at ingest.
+
+**How this repo reads outputs for insights**
+
+- **Merged outputs** (completed wins over top-level): the same merge pattern appears as `getMergedOutputsForPaymentText` in [`lib/kognitos/normalize-dashboard-run.ts`](lib/kognitos/normalize-dashboard-run.ts) (used for payment text and invoice resolution) and as `mergedOutputsFromPayload` in [`lib/kognitos/validation-from-automation-output.ts`](lib/kognitos/validation-from-automation-output.ts) (validation / VAL from **Validation Results** in JSON or markdown).
+- **Normalization for tables and KPIs**: [`lib/kognitos/normalize-dashboard-run.ts`](lib/kognitos/normalize-dashboard-run.ts) (`normalizeKognitosRowForDashboard`, `inferValidationChecks`, invoice/value/vendor heuristics).
+- **Markdown tables inside `markdown_report`**: [`lib/kognitos/markdown-report-supplier-invoice.ts`](lib/kognitos/markdown-report-supplier-invoice.ts) (e.g. supplier invoice document id) and validation logic that scans markdown for **Value Match** rows.
+
+**How to retrieve outputs (pick one)**
+
+1. **Supabase (full `payload`, best for analysis)**  
+   ```sql
+   SELECT id, payload
+   FROM kognitos_runs
+   WHERE id = 'YOUR_RUN_SHORT_ID';
+   ```  
+   The `id` column is the **short run id** (same segment used in Kognitos run URLs and `GET …/runs/{id}` paths). Inspect `payload` in the SQL editor or export JSON for offline scripts.
+
+2. **Kognitos REST API (live or when DB is empty)**  
+   Server helpers in [`lib/kognitos/client-core.ts`](lib/kognitos/client-core.ts): **`getRun(runId)`** (single run), **`listRunsRaw` / `listAllRunsForAutomationRaw`** (unmapped JSON so nested `file` / outputs match what you store). Paths follow `openapi.yaml`:  
+   `GET /api/v1/organizations/{org}/workspaces/{ws}/automations/{automation_id}/runs/{run_id}`.
+
+3. **CLI script (quick inspection)**  
+   With `KOGNITOS_*` env vars set (see [Environment Variables](#environment-variables)):
+   ```bash
+   npm run kognitos:read-output -- --run YOUR_RUN_SHORT_ID
+   ```  
+   Source: [`scripts/kognitos-read-automation-output.ts`](scripts/kognitos-read-automation-output.ts) — prints the **raw** Get Run JSON. Omit `--run` to print automation metadata plus a few recent runs with `userInputs` and `state.completed.outputs`.
+
+4. **Refresh stored payloads from Kognitos**  
+   If `payload` is stale or missing nested file paths:
+   ```bash
+   npm run refresh:run-payloads
+   ```  
+   Re-fetches each stored id via GET Run and updates `kognitos_runs.payload` plus `kognitos_run_inputs` (see [`scripts/refresh-kognitos-run-payloads.ts`](scripts/refresh-kognitos-run-payloads.ts)).
+
+5. **App HTTP API (normalized, not the full blob)**  
+   - `GET /api/kognitos/runs` — dashboard-ready rows (derived fields, URLs); use for UI parity checks, not for mining arbitrary output keys.  
+   - `GET /api/kognitos/runs/[id]` — maps `payload` through [`lib/kognitos/map-run.ts`](lib/kognitos/map-run.ts) to the **`KognitosRun`** shape (focused on stage/state/user inputs). **It does not re-expose the entire `outputs` tree**; for deep output inspection, use (1)–(3) above.  
+   - `GET /api/kognitos/runs/[id]/payload` — returns the **raw** `payload` JSON for that stored run (used by the **Runs / Invoices analyzed** validation icons to open the markdown validation report in a dialog).
+
 **Import runs from Kognitos:** use the **refresh icon** in the top bar (next to notifications). It calls `POST /api/kognitos/sync`, which loops **registered automations** in Supabase, paginates ListRuns per automation, inserts new rows with the correct automation link, and reindexes inputs (incremental per automation using the latest stored `create_time`). Requires Supabase service role + Kognitos base URL, token, org, and workspace (see above). Admins can register automations in onboarding or **Settings**.
 
 **Manual cleanup (Supabase only):** To remove synced data, use the SQL editor with a role that can delete from these tables. **Back up first.** Delete one automation by short id (same as in API paths / env):
@@ -287,6 +336,8 @@ See **[docs/BLUEPRINT.md](docs/BLUEPRINT.md)** for the complete architecture doc
 | `npm run lint` | Run ESLint |
 | `npm run seed` | Seed the Supabase database (loads `.env.local`) |
 | `npm run refresh:run-payloads` | Re-fetch each stored run from Kognitos GET Run and refresh inputs |
+| `npm run kognitos:read-output` | Print raw automation + run JSON from the Kognitos API (use `--run <id>` for one run); see [Automation run outputs](#automation-run-outputs-retrieve-for-insights) |
+| `npm run kognitos:supplier-invoices` | List supplier invoice numbers parsed from stored run payloads (helper for audits) |
 | `npx supabase db push` | Push schema migrations to your linked Supabase project |
 
 ## Environment Variables

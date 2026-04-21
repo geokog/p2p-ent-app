@@ -12,7 +12,7 @@ export function splitMarkdownTableCells(line: string): string[] | null {
   return core.split("|").map((c) => c.trim());
 }
 
-function isMarkdownTableSeparatorRow(cells: string[]): boolean {
+export function isMarkdownTableSeparatorRow(cells: string[]): boolean {
   return cells.every((c) => {
     const x = c.replace(/\s/g, "");
     return x === "" || /^-+$/.test(x);
@@ -66,12 +66,19 @@ export function supplierInvoiceDocNumberFromMarkdownReportText(
   return undefined;
 }
 
-/** Read `markdown_report` / `markdownReport` from a flat `outputs` object. */
-export function supplierInvoiceDocNumberFromOutputs(
+/** Plain-text body of `markdown_report` / `markdownReport` on merged outputs. */
+export function markdownReportTextFromOutputs(
   outputs: Record<string, unknown>,
 ): string | undefined {
   const mr = outputs.markdown_report ?? outputs.markdownReport;
-  const text = markdownReportTextFromField(mr);
+  return markdownReportTextFromField(mr);
+}
+
+/** Resolve supplier invoice id from `markdown_report` in merged outputs. */
+export function supplierInvoiceDocNumberFromOutputs(
+  outputs: Record<string, unknown>,
+): string | undefined {
+  const text = markdownReportTextFromOutputs(outputs);
   if (!text) return undefined;
   return supplierInvoiceDocNumberFromMarkdownReportText(text);
 }
