@@ -359,9 +359,10 @@ export function inferValidationChecks(
   const pick = (
     dim: "docOk" | "qtyOk" | "valOk" | "coaOk" | "payOk",
   ): boolean => {
+    // Explicit automation *_ok / COA pass-fail fields win over IDP/text inference.
     if (dim === "coaOk" || dim === "qtyOk" || dim === "valOk") {
-      if (auto[dim] !== undefined) return auto[dim]!;
       if (explicit[dim] !== undefined) return explicit[dim]!;
+      if (auto[dim] !== undefined) return auto[dim]!;
       return base[dim];
     }
     if (explicit[dim] !== undefined) return explicit[dim]!;

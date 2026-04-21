@@ -10,6 +10,7 @@ import {
   Settings,
   Store,
   Truck,
+  LifeBuoy,
   Layers,
   Menu,
   type LucideIcon,
@@ -36,6 +37,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   Settings,
   Store,
   Truck,
+  LifeBuoy,
   Layers,
 };
 

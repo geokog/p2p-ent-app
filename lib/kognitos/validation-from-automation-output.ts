@@ -46,6 +46,15 @@ function parseBool(v: unknown): boolean | undefined {
   return undefined;
 }
 
+/** Booleans, numeric 0/1, or PASS/FAIL-style strings (incl. wrapped protobuf scalars). */
+function boolOrPassFailFromValue(v: unknown): boolean | undefined {
+  const b = parseBool(v);
+  if (b !== undefined) return b;
+  const s = stringFromJsonValue(v);
+  if (!s) return undefined;
+  return passFailFromCell(s);
+}
+
 /** Interpret `payment_recommendation`-style text; `undefined` = no opinion. */
 export function payOkFromRecommendationText(pr: string): boolean | undefined {
   const u = pr.toUpperCase();
@@ -139,26 +148,6 @@ function outputsScanRoots(payload: Record<string, unknown>): unknown[] {
   const top = payload.outputs;
   if (top && typeof top === "object" && !Array.isArray(top)) roots.push(top);
   return roots;
-}
-
-function subtreeHasIdpExtraction(node: unknown): boolean {
-  let found = false;
-  const walk = (n: unknown, d: number) => {
-    if (found || d > 20 || n == null || typeof n !== "object") return;
-    if (Array.isArray(n)) {
-      for (const x of n) walk(x, d + 1);
-      return;
-    }
-    for (const k of Object.keys(n as object)) {
-      if (/idp_extraction/i.test(k)) {
-        found = true;
-        return;
-      }
-      walk((n as Record<string, unknown>)[k], d + 1);
-    }
-  };
-  walk(node, 0);
-  return found;
 }
 
 type ProtoAcc = {
@@ -272,6 +261,25 @@ function finalizeProtoDim(
   return undefined;
 }
 
+/** Maps normalized JSON keys (underscores stripped) to validation dimensions. */
+function explicitOkSlotFromNormKey(norm: string): Dim | null {
+  if (norm === "docok") return "docOk";
+  if (norm === "qtyok") return "qtyOk";
+  if (norm === "valok") return "valOk";
+  if (norm === "payok") return "payOk";
+  if (norm === "coaok") return "coaOk";
+  // Automations often emit dedicated COA pass/fail keys (not only `coa_ok`).
+  if (
+    norm.startsWith("coa") &&
+    /(ok|status|result|pass|valid|outcome|check|success|failed|fail|match|validation)/.test(
+      norm,
+    )
+  ) {
+    return "coaOk";
+  }
+  return null;
+}
+
 /** Deep *_ok / *_OK keys anywhere under payload (automation often nests them). */
 export function readDeepExplicitOkFlags(
   payload: Record<string, unknown>,
@@ -280,23 +288,12 @@ export function readDeepExplicitOkFlags(
 
   const apply = (key: string, v: unknown) => {
     const norm = key.replace(/_/g, "").toLowerCase();
-    const b = parseBool(v);
-    if (b === undefined) return;
-    const slot =
-      norm === "docok"
-        ? "docOk"
-        : norm === "qtyok"
-          ? "qtyOk"
-          : norm === "valok"
-            ? "valOk"
-            : norm === "coaok"
-              ? "coaOk"
-              : norm === "payok"
-                ? "payOk"
-                : null;
+    const slot = explicitOkSlotFromNormKey(norm);
     if (!slot) return;
-    if (b === false) acc[slot] = "f";
-    else if (b === true && acc[slot] !== "f") acc[slot] = "t";
+    const verdict = boolOrPassFailFromValue(v);
+    if (verdict === undefined) return;
+    if (verdict === false) acc[slot] = "f";
+    else if (verdict === true && acc[slot] !== "f") acc[slot] = "t";
   };
 
   const visit = (node: unknown, depth: number) => {
@@ -336,11 +333,34 @@ export function readShallowExplicitOkFlags(
     const v = bag[snake] ?? bag[camel];
     return parseBool(v);
   };
+  function firstBoolOrPassFail(keys: string[]): boolean | undefined {
+    for (const k of keys) {
+      const v = bag[k];
+      const r = boolOrPassFailFromValue(v);
+      if (r !== undefined) return r;
+    }
+    return undefined;
+  }
   const partial: Partial<ValidationChecks> = {};
   const doc = pick("doc_ok", "docOk");
   const qty = pick("qty_ok", "qtyOk");
   const val = pick("val_ok", "valOk");
-  const coa = pick("coa_ok", "coaOk");
+  const coa = firstBoolOrPassFail([
+    "coa_ok",
+    "coaOk",
+    "coa_status",
+    "coaStatus",
+    "coa_result",
+    "coaResult",
+    "coa_pass",
+    "coaPass",
+    "coa_passed",
+    "coaPassed",
+    "coa_validation",
+    "coaValidation",
+    "coa_outcome",
+    "coaOutcome",
+  ]);
   const pay = pick("pay_ok", "payOk");
   if (doc !== undefined) partial.docOk = doc;
   if (qty !== undefined) partial.qtyOk = qty;
@@ -362,11 +382,9 @@ export function inferCoaQtyValFromAutomationOutput(
 
   const proto = emptyAcc();
   const strings: string[] = [];
-  let anyIdp = false;
   for (const r of roots) {
     walkExtractedFields(r, 0, proto);
     collectStringLeaves(r, 0, strings);
-    if (subtreeHasIdpExtraction(r)) anyIdp = true;
   }
 
   const text = textMismatchSignals(strings);
@@ -376,7 +394,6 @@ export function inferCoaQtyValFromAutomationOutput(
   const coaProto = finalizeProtoDim(proto.coa);
   if (text.coaFail) out.coaOk = false;
   else if (coaProto !== undefined) out.coaOk = coaProto;
-  else if (anyIdp && !proto.coa.seen) out.coaOk = false;
 
   const qtyProto = finalizeProtoDim(proto.qty);
   if (text.qtyFail) out.qtyOk = false;
