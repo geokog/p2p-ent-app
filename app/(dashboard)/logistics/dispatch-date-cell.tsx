@@ -53,11 +53,14 @@ export function DispatchDateCell({
   }, [open, nativeDateInputId]);
 
   return (
-    <div className="flex min-w-0 items-center gap-1 pr-1">
+    <div className="flex items-center gap-1.5 pr-0.5">
       <input
         id={`cell-dispatch-${rowIndex}`}
         type="text"
-        className={cn(logisticsCellEditClass, "min-w-[5rem] flex-1 tabular-nums")}
+        className={cn(
+          logisticsCellEditClass,
+          "field-sizing-content max-w-none min-w-[7ch] w-auto shrink-0 tabular-nums",
+        )}
         aria-label={`Logistics row ${rowIndex} Dispatch outbound ${outboundId}`}
         data-row={String(rowIndex)}
         data-field="dispatch"

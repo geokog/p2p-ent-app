@@ -18,7 +18,7 @@ export type LogisticsRow = {
 /** Static sample rows for the logistics grid. */
 export const LOGISTICS_ROWS: LogisticsRow[] = [
   {
-    outboundId: "0108156985S",
+    outboundId: "0108156985ST",
     carrierId: "FLNA",
     trailerId: "000",
     trailerType: "53SEV",
@@ -32,7 +32,7 @@ export const LOGISTICS_ROWS: LogisticsRow[] = [
     ignore: null,
   },
   {
-    outboundId: "009880141S",
+    outboundId: "009880141ST",
     carrierId: "FLNA",
     trailerId: "",
     trailerType: "",

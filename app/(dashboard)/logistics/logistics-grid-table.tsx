@@ -151,7 +151,7 @@ export function LogisticsGridTable() {
                     id={COLUMN_IDS.outboundId}
                     role="columnheader"
                     scope="col"
-                    className="whitespace-nowrap"
+                    className="min-w-max whitespace-nowrap"
                   >
                     <HeaderLabel>Outbound ID</HeaderLabel>
                   </TableHead>
@@ -215,7 +215,7 @@ export function LogisticsGridTable() {
                     id={COLUMN_IDS.dispatch}
                     role="columnheader"
                     scope="col"
-                    className="whitespace-nowrap"
+                    className="min-w-max whitespace-nowrap"
                   >
                     <HeaderLabel>Dispatch</HeaderLabel>
                   </TableHead>
@@ -261,13 +261,18 @@ export function LogisticsGridTable() {
                           key={field}
                           role="gridcell"
                           headers={COLUMN_IDS[field]}
-                          className="p-1 align-middle"
+                          className={cn(
+                            "p-1 align-middle",
+                            field === "outboundId" &&
+                              "min-w-max max-w-none overflow-visible",
+                          )}
                         >
                           <input
                             type="text"
                             className={cn(
                               logisticsCellEditClass,
-                              field === "outboundId" && "font-mono tabular-nums",
+                              field === "outboundId" &&
+                                "field-sizing-content max-w-none min-w-[11ch] w-auto font-mono tabular-nums",
                               (field === "carrierId" || field === "trailerId") &&
                                 "font-mono",
                             )}
@@ -335,7 +340,7 @@ export function LogisticsGridTable() {
                       <TableCell
                         role="gridcell"
                         headers={COLUMN_IDS.dispatch}
-                        className="p-0 align-middle"
+                        className="min-w-max max-w-none overflow-visible p-1 align-middle"
                       >
                         <DispatchDateCell
                           rowIndex={rowNum}
