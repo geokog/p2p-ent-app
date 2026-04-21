@@ -17,6 +17,18 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { WorkspaceAutomationListRow } from "./workspace-automation-list-row";
 
+function discoverErrorMessage(code: string | undefined, status: number): string {
+  if (code === "kognitos_env_missing") {
+    return [
+      "Kognitos environment variables are not set on this deployment.",
+      "Add KOGNITOS_BASE_URL, KOGNITOS_API_KEY (or KOGNITOS_PAT),",
+      "KOGNITOS_ORGANIZATION_ID (or KOGNITOS_ORG_ID), and KOGNITOS_WORKSPACE_ID",
+      "in Vercel (Project → Settings → Environment Variables) for Production, then redeploy.",
+    ].join(" ");
+  }
+  return code ?? `Request failed (${status})`;
+}
+
 export type DiscoverItem = {
   automation_id: string;
   resource_name: string;
@@ -77,7 +89,7 @@ export function KognitosAutomationPickerDialog({
         error?: string;
       };
       if (!res.ok) {
-        setDiscoverError(json.error ?? `Request failed (${res.status})`);
+        setDiscoverError(discoverErrorMessage(json.error, res.status));
         return;
       }
       const mapped = (json.automations ?? []).map((a) => ({

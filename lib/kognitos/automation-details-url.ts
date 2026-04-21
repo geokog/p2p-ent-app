@@ -27,6 +27,7 @@ function appOriginFromEnv(): string | null {
   }
 }
 
+/** `automationId` is Kognitos `automation_id` (same as {@link getKognitosAutomationRunResultsUrl}). */
 export function getKognitosAutomationDetailsUrl(
   automationId: string,
 ): string | null {
@@ -41,4 +42,30 @@ export function getKognitosAutomationDetailsUrl(
   if (!origin || !org || !ws) return null;
 
   return `${origin}/organizations/${encodeURIComponent(org)}/workspaces/${encodeURIComponent(ws)}/automations/${encodeURIComponent(id)}/details`;
+}
+
+/**
+ * Web app URL to open a single run’s results inside the automation context.
+ * Mirrors the resource layout used by the REST API (without `/api/v1`).
+ *
+ * `automationId` must be the Kognitos automation identifier (`automation_id`
+ * from the API / `kognitos_automations.automation_id`), **not** our internal
+ * Supabase UUID for `kognitos_automations.id`.
+ */
+export function getKognitosAutomationRunResultsUrl(
+  automationId: string,
+  runId: string,
+): string | null {
+  const auto = automationId.trim();
+  const run = runId.trim();
+  if (!auto || !run) return null;
+  const origin = appOriginFromEnv();
+  const org =
+    process.env.KOGNITOS_ORGANIZATION_ID?.trim() ||
+    process.env.KOGNITOS_ORG_ID?.trim() ||
+    "";
+  const ws = process.env.KOGNITOS_WORKSPACE_ID?.trim() || "";
+  if (!origin || !org || !ws) return null;
+
+  return `${origin}/organizations/${encodeURIComponent(org)}/workspaces/${encodeURIComponent(ws)}/automations/${encodeURIComponent(auto)}/runs/${encodeURIComponent(run)}`;
 }

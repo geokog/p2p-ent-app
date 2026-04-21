@@ -8,6 +8,8 @@ import {
   BookOpen,
   Bell,
   Settings,
+  Store,
+  Truck,
   Layers,
   Menu,
   type LucideIcon,
@@ -32,6 +34,8 @@ const ICON_MAP: Record<string, LucideIcon> = {
   BookOpen,
   Bell,
   Settings,
+  Store,
+  Truck,
   Layers,
 };
 
