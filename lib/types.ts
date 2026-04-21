@@ -229,8 +229,8 @@ export const MOCK_USERS: Record<UserRole, User> = {
   admin: {
     id: "usr_004",
     org_id: "org_001",
-    full_name: "David Chen",
-    email: "david.chen@example.com",
+    full_name: "George Williams",
+    email: "george.williams@example.com",
     role: "admin",
     avatar_url: "",
     created_at: "2025-01-15T08:00:00Z",

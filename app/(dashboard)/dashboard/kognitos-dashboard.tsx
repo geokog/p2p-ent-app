@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   Building2,
+  ChevronRight,
   Clock,
   ExternalLink,
   FlaskConical,
@@ -27,9 +28,13 @@ import {
 import { KognitosRunsAnalyzedTable } from "@/components/kognitos/kognitos-runs-analyzed-table";
 import { vendorProfileHref } from "@/lib/vendors/vendor-path";
 import {
+  type DashboardRunSortKey,
   type KognitosDashboardRun,
   type PeriodFilter,
   filterRunsByPeriod,
+  runMeetsTotalApprovedPaymentsRequirements,
+  sortDashboardRunsForDisplay,
+  sortKognitosDashboardRunsByColumn,
 } from "@/lib/kognitos/normalize-dashboard-run";
 import { cn } from "@/lib/utils";
 
@@ -48,8 +53,11 @@ type HealthSeg = {
 };
 
 function buildValidationHealth(runs: KognitosDashboardRun[]): HealthSeg[] {
-  const pending = runs.filter((r) => r.pipeline === "pending");
-  const processed = runs.filter((r) => r.pipeline === "processed").length;
+  const pending = runs.filter(
+    (r) => !runMeetsTotalApprovedPaymentsRequirements(r),
+  );
+  const processed = runs.filter(runMeetsTotalApprovedPaymentsRequirements)
+    .length;
   return [
     {
       key: "processed",
@@ -93,9 +101,15 @@ export function KognitosRunsDashboard() {
   const [period, setPeriod] = useState<PeriodFilter>("all");
   const [tab, setTab] = useState<"pending" | "processed" | "all">("pending");
   const [vendorFilter, setVendorFilter] = useState<string>("all");
-  const [actionDismissed, setActionDismissed] = useState(false);
+  const [expertQueueBannerDismissed, setExpertQueueBannerDismissed] =
+    useState(false);
+  const [expertQueueCount, setExpertQueueCount] = useState<number | null>(null);
   const [pageIndex, setPageIndex] = useState(0);
   const [pageSize, setPageSize] = useState(10);
+  const [runSort, setRunSort] = useState<{
+    key: DashboardRunSortKey;
+    dir: "asc" | "desc";
+  } | null>(null);
 
   const [runs, setRuns] = useState<KognitosDashboardRun[]>([]);
   const [loading, setLoading] = useState(true);
@@ -124,35 +138,41 @@ export function KognitosRunsDashboard() {
     }
   }, []);
 
+  const loadExpertQueueCount = useCallback(async () => {
+    try {
+      const res = await fetch("/api/kognitos/expert-queue");
+      const json = (await res.json()) as { items?: unknown[] };
+      if (!res.ok) {
+        setExpertQueueCount(0);
+        return;
+      }
+      setExpertQueueCount(json.items?.length ?? 0);
+    } catch {
+      setExpertQueueCount(0);
+    }
+  }, []);
+
   useEffect(() => {
     void loadRuns();
   }, [loadRuns]);
 
   useEffect(() => {
-    const handler = () => void loadRuns();
+    void loadExpertQueueCount();
+  }, [loadExpertQueueCount]);
+
+  useEffect(() => {
+    const handler = () => {
+      void loadRuns();
+      void loadExpertQueueCount();
+    };
     window.addEventListener("chat-data-changed", handler);
     return () => window.removeEventListener("chat-data-changed", handler);
-  }, [loadRuns]);
+  }, [loadRuns, loadExpertQueueCount]);
 
   const periodRuns = useMemo(
     () => filterRunsByPeriod(runs, period),
     [runs, period],
   );
-
-  const actionAlert = useMemo(() => {
-    const pendingValFail = periodRuns.filter(
-      (r) => r.pipeline === "pending" && !r.valOk && r.vendor !== "—",
-    );
-    const byV = new Map<string, number>();
-    for (const r of pendingValFail) {
-      byV.set(r.vendor, (byV.get(r.vendor) ?? 0) + 1);
-    }
-    let best = { vendor: "", count: 0 };
-    for (const [vendor, count] of byV) {
-      if (count > best.count) best = { vendor, count };
-    }
-    return best.vendor ? best : null;
-  }, [periodRuns]);
 
   const vendorOptions = useMemo(() => {
     const set = new Set(periodRuns.map((r) => r.vendor));
@@ -160,8 +180,10 @@ export function KognitosRunsDashboard() {
   }, [periodRuns]);
 
   const kpis = useMemo(() => {
-    const pending = periodRuns.filter((r) => r.pipeline === "pending");
-    const processed = periodRuns.filter((r) => r.pipeline === "processed");
+    const processed = periodRuns.filter(runMeetsTotalApprovedPaymentsRequirements);
+    const pending = periodRuns.filter(
+      (r) => !runMeetsTotalApprovedPaymentsRequirements(r),
+    );
     const pendingTotal = pending.reduce((s, r) => s + r.value, 0);
     const approvedTotal = processed.reduce((s, r) => s + r.value, 0);
 
@@ -209,22 +231,53 @@ export function KognitosRunsDashboard() {
     return periodRuns.filter((r) => r.pipeline === tab);
   }, [periodRuns, tab]);
 
+  const runsForTabCounts = useMemo(() => {
+    if (vendorFilter === "all") return periodRuns;
+    return periodRuns.filter((r) => r.vendor === vendorFilter);
+  }, [periodRuns, vendorFilter]);
+
+  const tabCounts = useMemo(
+    () => ({
+      pending: runsForTabCounts.filter((r) => r.pipeline === "pending").length,
+      processed: runsForTabCounts.filter((r) => r.pipeline === "processed")
+        .length,
+      all: runsForTabCounts.length,
+    }),
+    [runsForTabCounts],
+  );
+
   const tableRows = useMemo(() => {
-    if (vendorFilter === "all") return tabFiltered;
-    return tabFiltered.filter((r) => r.vendor === vendorFilter);
+    const filtered =
+      vendorFilter === "all"
+        ? tabFiltered
+        : tabFiltered.filter((r) => r.vendor === vendorFilter);
+    return sortDashboardRunsForDisplay(filtered);
   }, [tabFiltered, vendorFilter]);
 
-  const pageCount = Math.max(1, Math.ceil(tableRows.length / pageSize));
+  const sortedTableRows = useMemo(
+    () => sortKognitosDashboardRunsByColumn(tableRows, runSort),
+    [tableRows, runSort],
+  );
+
+  const handleSortColumn = useCallback((key: DashboardRunSortKey) => {
+    setRunSort((prev) => {
+      if (!prev || prev.key !== key) return { key, dir: "asc" };
+      return { key, dir: prev.dir === "asc" ? "desc" : "asc" };
+    });
+    setPageIndex(0);
+  }, []);
+
+  const pageCount = Math.max(1, Math.ceil(sortedTableRows.length / pageSize));
   const safePage = Math.min(pageIndex, pageCount - 1);
   const pageStart = safePage * pageSize;
-  const pageSlice = tableRows.slice(pageStart, pageStart + pageSize);
-  const rangeStart = tableRows.length === 0 ? 0 : pageStart + 1;
-  const rangeEnd = Math.min(pageStart + pageSize, tableRows.length);
+  const pageSlice = sortedTableRows.slice(pageStart, pageStart + pageSize);
+  const rangeStart = sortedTableRows.length === 0 ? 0 : pageStart + 1;
+  const rangeEnd = Math.min(pageStart + pageSize, sortedTableRows.length);
 
   useEffect(() => {
-    const maxPage = Math.max(0, Math.ceil(tableRows.length / pageSize) - 1);
+    const maxPage = Math.max(0, Math.ceil(sortedTableRows.length / pageSize) - 1);
     setPageIndex((i) => (i > maxPage ? maxPage : i));
-  }, [tableRows.length, pageSize]);
+  }, [sortedTableRows.length, pageSize]);
 
   return (
     <div className="space-y-6">
@@ -242,6 +295,7 @@ export function KognitosRunsDashboard() {
               value={period}
               onValueChange={(v) => {
                 setPeriod(v as PeriodFilter);
+                setRunSort(null);
                 setPageIndex(0);
               }}
             >
@@ -263,49 +317,46 @@ export function KognitosRunsDashboard() {
           </p>
         ) : null}
 
-        {!actionDismissed && actionAlert ? (
+        {!expertQueueBannerDismissed ? (
           <div
             className={cn(
-              "rounded-lg border border-rose-200 bg-rose-50/90 py-5 pl-5 pr-4 shadow-sm",
-              "dark:border-rose-900/60 dark:bg-rose-950/25",
-              "border-l-[6px] border-l-rose-500 dark:border-l-rose-400",
+              "rounded-lg border border-border bg-white py-5 pl-5 pr-4 shadow-sm",
+              "dark:border-border dark:bg-card",
             )}
           >
-            <p className="font-semibold text-rose-950 dark:text-rose-100">
-              Action required — {actionAlert.vendor}
+            <p className="font-semibold text-foreground">
+              Expert Queue -{" "}
+              {expertQueueCount === null ? (
+                <span className="font-normal text-muted-foreground">
+                  loading…
+                </span>
+              ) : (
+                <>
+                  {expertQueueCount}{" "}
+                  {expertQueueCount === 1 ? "item" : "items"} pending
+                </>
+              )}
             </p>
-            <ul className="mt-3 list-disc space-y-1.5 pl-5 text-sm text-rose-900/90 dark:text-rose-100/90">
-              <li>
-                {actionAlert.count} run
-                {actionAlert.count === 1 ? "" : "s"} in the selected period show
-                value validation issues (pending payment path).
-              </li>
-              <li>
-                Review runs for this counterparty and resolve outputs in
-                Kognitos before releasing payment.
-              </li>
-            </ul>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Same list as the Expert Queue page: runs that need review and
+              resolution.
+            </p>
             <div className="mt-4 flex flex-wrap gap-2">
               <Button
                 type="button"
                 className="gap-2 bg-emerald-600 text-white hover:bg-emerald-700"
                 asChild
               >
-                <Link
-                  href={vendorProfileHref(actionAlert.vendor) ?? "#"}
-                  onClick={(e) => {
-                    if (!vendorProfileHref(actionAlert.vendor)) e.preventDefault();
-                  }}
-                >
-                  See Vendor
+                <Link href="/expert-queue" className="inline-flex items-center gap-2">
+                  Open Expert Queue
                   <ExternalLink className="size-4" />
                 </Link>
               </Button>
               <Button
                 type="button"
                 variant="outline"
-                className="border-rose-300 bg-white/80 hover:bg-white dark:border-rose-800 dark:bg-transparent"
-                onClick={() => setActionDismissed(true)}
+                className="border-border bg-white hover:bg-muted/50 dark:bg-transparent dark:hover:bg-muted/40"
+                onClick={() => setExpertQueueBannerDismissed(true)}
               >
                 Mark as Read
               </Button>
@@ -389,14 +440,27 @@ export function KognitosRunsDashboard() {
           </Card>
         </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Validation health</CardTitle>
-            <CardDescription>
-              Aggregated from run pipeline and per-step checks on pending runs.
-            </CardDescription>
+        <Card className="overflow-hidden shadow-sm">
+          <CardHeader className="flex flex-col gap-3 border-b px-6 py-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="space-y-1">
+              <CardTitle>Validation health</CardTitle>
+              <CardDescription>
+                Aggregated from run pipeline and per-step checks on pending runs.
+              </CardDescription>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              asChild
+              className="h-auto shrink-0 gap-0.5 px-2 text-sm font-medium text-emerald-700 hover:bg-emerald-50 hover:text-emerald-900 dark:text-emerald-400 dark:hover:bg-emerald-950/40 dark:hover:text-emerald-100"
+            >
+              <Link href="/expert-queue" className="inline-flex items-center gap-0.5">
+                View issues
+                <ChevronRight className="size-4" aria-hidden />
+              </Link>
+            </Button>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-4 border-b px-6 pb-6">
             <div className="flex h-3 w-full overflow-hidden rounded-full bg-muted">
               {validationSegments.map((seg) =>
                 seg.count === 0 ? null : (
@@ -427,22 +491,28 @@ export function KognitosRunsDashboard() {
               ))}
             </ul>
           </CardContent>
-        </Card>
 
-        <KognitosRunsAnalyzedTable
+          <KognitosRunsAnalyzedTable
+          surface="plain"
           loading={loading}
           tab={tab}
           onTabChange={(t) => {
             setTab(t);
+            setRunSort(null);
             setPageIndex(0);
           }}
+          tabCounts={tabCounts}
           vendorFilter={vendorFilter}
           onVendorFilterChange={(v) => {
             setVendorFilter(v);
+            setRunSort(null);
             setPageIndex(0);
           }}
           vendorOptions={vendorOptions}
           vendorNameHref={vendorProfileHref}
+          sortKey={runSort?.key ?? null}
+          sortDir={runSort?.dir}
+          onSortColumn={handleSortColumn}
           pageSlice={pageSlice}
           safePage={safePage}
           pageCount={pageCount}
@@ -455,8 +525,10 @@ export function KognitosRunsDashboard() {
           onPageNext={() => setPageIndex(safePage + 1)}
           rangeStart={rangeStart}
           rangeEnd={rangeEnd}
-          totalRowCount={tableRows.length}
+          totalRowCount={sortedTableRows.length}
+          description="Review and manage analyzed invoice runs."
         />
+        </Card>
     </div>
   );
 }

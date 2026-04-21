@@ -5,6 +5,11 @@ import {
   enrichDashboardRunWithRequest,
   normalizeKognitosRowForDashboard,
 } from "@/lib/kognitos/normalize-dashboard-run";
+import {
+  isKognitosFileDownloadConfigured,
+  resolveInvoicePdfFileIdFromRun,
+  type RunInputFileRow,
+} from "@/lib/kognitos/resolve-invoice-pdf-file-id";
 import { getRequestIdFromRunPayload } from "@/lib/kognitos/run-payload";
 import { supabaseAdmin } from "@/lib/supabase";
 
@@ -115,6 +120,39 @@ export async function GET() {
     if (!runErr && byRun) addRequestMaps(byRun as RequestRow[], requestById, requestByRunId);
   }
 
+  const inputsByRunId = new Map<string, RunInputFileRow[]>();
+  if (runIds.length > 0) {
+    const { data: inputRows, error: inErr } = await supabaseAdmin
+      .from("kognitos_run_inputs")
+      .select("kognitos_run_id, kognitos_file_id, file_name, input_key")
+      .in("kognitos_run_id", runIds);
+    if (!inErr && inputRows) {
+      for (const raw of inputRows) {
+        const r = raw as {
+          kognitos_run_id?: string;
+          kognitos_file_id?: string;
+          file_name?: string | null;
+          input_key?: string;
+        };
+        const rid = String(r.kognitos_run_id ?? "");
+        if (!rid) continue;
+        const row: RunInputFileRow = {
+          kognitos_file_id: String(r.kognitos_file_id ?? ""),
+          file_name:
+            typeof r.file_name === "string" || r.file_name === null
+              ? r.file_name
+              : null,
+          input_key: String(r.input_key ?? ""),
+        };
+        const list = inputsByRunId.get(rid) ?? [];
+        list.push(row);
+        inputsByRunId.set(rid, list);
+      }
+    }
+  }
+
+  const kognitosPdf = isKognitosFileDownloadConfigured();
+
   const runs = rows.map((row) => {
     const payload =
       row.payload && typeof row.payload === "object" && !Array.isArray(row.payload)
@@ -152,8 +190,15 @@ export async function GET() {
       kognitosAutomationUrlId != null
         ? getKognitosAutomationRunResultsUrl(kognitosAutomationUrlId, String(row.id))
         : null;
+    const inputList = inputsByRunId.get(String(row.id)) ?? [];
+    const hasPdf =
+      kognitosPdf &&
+      Boolean(resolveInvoicePdfFileIdFromRun(payload, inputList));
+    const invoicePdfUrl = hasPdf
+      ? `/api/kognitos/runs/${encodeURIComponent(String(row.id))}/invoice-pdf`
+      : null;
     return enrichDashboardRunWithRequest(
-      { ...normalized, kognitosRunUrl },
+      { ...normalized, kognitosRunUrl, invoicePdfUrl },
       req,
     );
   });

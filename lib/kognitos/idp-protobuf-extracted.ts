@@ -54,7 +54,7 @@ function tryFlattenProtobufDictionary(
 const VENDOR_FIELD = /^(vendor_name|supplier(_name)?|vendor_legal_name|seller(_name)?|bill_to_name)$/i;
 
 const INVOICE_FIELD =
-  /^(vendor_invoice_number|invoice_number|invoice_id|invoice_no|sap_invoice_number)$/i;
+  /^(vendor_invoice_number|supplier_invoice(_number|_id)?|invoice_number|invoice_id|invoice_no|sap_invoice_number|supplier\s+invoice)$/i;
 
 const MONEY_FIELD =
   /^(total_amount|amount_due|invoice_total|grand_total|net_amount|gross_amount|subtotal|balance_due)$/i;

@@ -1,4 +1,5 @@
 import { extractIdpProtobufHints } from "@/lib/kognitos/idp-protobuf-extracted";
+import { supplierInvoiceDocNumberFromOutputs } from "@/lib/kognitos/markdown-report-supplier-invoice";
 import {
   deepMoneyHint,
   deepTitleHint,
@@ -42,6 +43,70 @@ export function filterRunsByPeriod(
   });
 }
 
+/** Placeholder vendor + zero value (no usable row) — show after real runs in tables. */
+function isDashboardRunSortTail(r: KognitosDashboardRun): boolean {
+  return r.vendor === "—" && r.value === 0;
+}
+
+/**
+ * Stable sort: runs with no vendor name and $0 value move to the end; relative
+ * order of other rows is unchanged.
+ */
+export function sortDashboardRunsForDisplay(
+  rows: KognitosDashboardRun[],
+): KognitosDashboardRun[] {
+  return [...rows]
+    .map((r, i) => ({ r, i }))
+    .sort((a, b) => {
+      const an = isDashboardRunSortTail(a.r) ? 1 : 0;
+      const bn = isDashboardRunSortTail(b.r) ? 1 : 0;
+      if (an !== bn) return an - bn;
+      return a.i - b.i;
+    })
+    .map((x) => x.r);
+}
+
+export type DashboardRunSortKey =
+  | "vendor"
+  | "invoice"
+  | "value"
+  | "completed";
+
+/** Client-side column sort for analyzed-runs tables (stable only within ties). */
+export function sortKognitosDashboardRunsByColumn(
+  rows: KognitosDashboardRun[],
+  sort: { key: DashboardRunSortKey; dir: "asc" | "desc" } | null,
+): KognitosDashboardRun[] {
+  if (!sort) return rows;
+  const mult = sort.dir === "asc" ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    switch (sort.key) {
+      case "vendor":
+        return mult * a.vendor.localeCompare(b.vendor);
+      case "invoice":
+        return (
+          mult *
+          a.invoiceNumber.localeCompare(b.invoiceNumber, undefined, {
+            numeric: true,
+          })
+        );
+      case "value":
+        return mult * (a.value - b.value);
+      case "completed": {
+        if (!a.completedAt && !b.completedAt) return 0;
+        if (!a.completedAt) return 1;
+        if (!b.completedAt) return -1;
+        return (
+          mult *
+          (new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime())
+        );
+      }
+      default:
+        return 0;
+    }
+  });
+}
+
 export interface KognitosDashboardRun {
   id: string;
   /**
@@ -52,6 +117,11 @@ export interface KognitosDashboardRun {
   /** True when `vendor` came from vendor/supplier keys (not title fallback). */
   vendorIsFromDedicatedKeys: boolean;
   invoiceNumber: string;
+  /**
+   * Same-origin URL to proxy the invoice PDF from Kognitos (`GET …/invoice-pdf`),
+   * when a file ref was resolved for this run. Set by `/api/kognitos/runs`, not here.
+   */
+  invoicePdfUrl: string | null;
   /** Title / product line from user inputs (for “top line item” KPI). */
   lineItem: string;
   /** Parsed amount in USD (0 when not present in payload). */
@@ -106,6 +176,20 @@ function firstString(
   for (const k of keys) {
     const s = stringFromJsonValue(o[k]);
     if (s) return s;
+  }
+  return undefined;
+}
+
+/** Fixture invoice from bundled sample extractions — not a real SAP supplier invoice. */
+const SKIP_AS_INVOICE_ID_DISPLAY = /^INV-112233$/i;
+
+function firstNonSkippedString(
+  o: Record<string, unknown>,
+  keys: readonly string[],
+): string | undefined {
+  for (const k of keys) {
+    const s = stringFromJsonValue(o[k]);
+    if (s && !SKIP_AS_INVOICE_ID_DISPLAY.test(s.trim())) return s;
   }
   return undefined;
 }
@@ -407,6 +491,22 @@ export function pipelineFromChecks(checks: {
     : "pending";
 }
 
+/**
+ * Dashboard “Total Approved Payments” bar: all of DOC, QTY, VAL, COA, and PAY pass.
+ * “Total Pending Payments” is the complement (any run that does not meet this).
+ */
+export function runMeetsTotalApprovedPaymentsRequirements(
+  r: KognitosDashboardRun,
+): boolean {
+  return pipelineFromChecks({
+    docOk: r.docOk,
+    qtyOk: r.qtyOk,
+    valOk: r.valOk,
+    coaOk: r.coaOk,
+    payOk: r.payOk,
+  }) === "processed";
+}
+
 /** When a run’s `request_id` matches a row in `requests`, fill value / display name gaps. */
 function numericEstimatedValue(raw: unknown): number {
   if (typeof raw === "number" && Number.isFinite(raw)) return raw;
@@ -534,14 +634,46 @@ export function normalizeKognitosRowForDashboard(row: {
       ? vendorFromKeys
       : vendorDeep ?? "—";
 
+  /** SAP / automation: canonical supplier invoice id (e.g. `5100001841`). Prefer `outputs` over UI/IDP. */
+  const supplierInvoiceKeys = [
+    "Supplier Invoice",
+    "Supplier_Invoice",
+    "supplier_invoice",
+    "supplierInvoice",
+    "supplier_invoice_number",
+    "supplierInvoiceNumber",
+  ] as const;
+
+  const genericInvoiceKeys = [
+    "invoice_number",
+    "invoiceNumber",
+    "invoice_id",
+    "invoiceId",
+    "vendor_invoice_number",
+    "vendorInvoiceNumber",
+  ] as const;
+
+  const idpInvoice =
+    idpHints.invoiceNumber &&
+    !SKIP_AS_INVOICE_ID_DISPLAY.test(idpHints.invoiceNumber.trim())
+      ? idpHints.invoiceNumber
+      : undefined;
+
+  /** Same merge as payment text: top-level `outputs` plus `state.completed.outputs` (completed wins). */
+  const outputsMerged = getMergedOutputsForPaymentText(payload);
+
+  const fromMarkdownTable = supplierInvoiceDocNumberFromOutputs(outputsMerged);
+  const fromMarkdownOk =
+    fromMarkdownTable &&
+    !SKIP_AS_INVOICE_ID_DISPLAY.test(fromMarkdownTable.trim());
+
   const invoiceNumber =
-    firstString(ui, [
-      "invoice_number",
-      "invoiceNumber",
-      "invoice_id",
-      "invoiceId",
-    ]) ??
-    idpHints.invoiceNumber ??
+    (fromMarkdownOk ? fromMarkdownTable : undefined) ??
+    firstNonSkippedString(outputsMerged, supplierInvoiceKeys) ??
+    firstNonSkippedString(ui, supplierInvoiceKeys) ??
+    firstNonSkippedString(outputsMerged, genericInvoiceKeys) ??
+    firstNonSkippedString(ui, genericInvoiceKeys) ??
+    idpInvoice ??
     getRequestIdFromRunPayload(payload) ??
     String(row.id);
 
@@ -575,6 +707,7 @@ export function normalizeKognitosRowForDashboard(row: {
   return {
     id: String(row.id),
     kognitosRunUrl: null,
+    invoicePdfUrl: null,
     vendor,
     vendorIsFromDedicatedKeys:
       vendorFromInputs !== "—" ||

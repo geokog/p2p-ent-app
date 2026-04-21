@@ -11,7 +11,8 @@
     "lint": "eslint",
     "seed": "npx tsx scripts/seed.ts",
     "refresh:run-payloads": "npx tsx scripts/refresh-kognitos-run-payloads.ts",
-    "kognitos:read-output": "npx tsx scripts/kognitos-read-automation-output.ts"
+    "kognitos:read-output": "npx tsx scripts/kognitos-read-automation-output.ts",
+    "kognitos:supplier-invoices": "npx tsx scripts/list-runs-supplier-invoice.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",

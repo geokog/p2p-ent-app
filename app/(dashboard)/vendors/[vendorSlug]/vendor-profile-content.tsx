@@ -23,9 +23,12 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
+  type DashboardRunSortKey,
   type KognitosDashboardRun,
   type PeriodFilter,
   filterRunsByPeriod,
+  sortDashboardRunsForDisplay,
+  sortKognitosDashboardRunsByColumn,
 } from "@/lib/kognitos/normalize-dashboard-run";
 import {
   decodeVendorSlugParam,
@@ -75,6 +78,10 @@ export function VendorProfileContent() {
   const [tab, setTab] = useState<"pending" | "processed" | "all">("all");
   const [pageIndex, setPageIndex] = useState(0);
   const [pageSize, setPageSize] = useState(10);
+  const [runSort, setRunSort] = useState<{
+    key: DashboardRunSortKey;
+    dir: "asc" | "desc";
+  } | null>(null);
 
   const loadRuns = useCallback(async () => {
     setLoading(true);
@@ -167,22 +174,47 @@ export function VendorProfileContent() {
     }
   }, [materialKeys, materialTab]);
 
+  const tabCounts = useMemo(
+    () => ({
+      pending: vendorRuns.filter((r) => r.pipeline === "pending").length,
+      processed: vendorRuns.filter((r) => r.pipeline === "processed").length,
+      all: vendorRuns.length,
+    }),
+    [vendorRuns],
+  );
+
   const tabFiltered = useMemo(() => {
-    if (tab === "all") return vendorRuns;
-    return vendorRuns.filter((r) => r.pipeline === tab);
+    const rows =
+      tab === "all"
+        ? vendorRuns
+        : vendorRuns.filter((r) => r.pipeline === tab);
+    return sortDashboardRunsForDisplay(rows);
   }, [vendorRuns, tab]);
 
-  const pageCount = Math.max(1, Math.ceil(tabFiltered.length / pageSize));
+  const sortedTabRows = useMemo(
+    () => sortKognitosDashboardRunsByColumn(tabFiltered, runSort),
+    [tabFiltered, runSort],
+  );
+
+  const handleSortColumn = useCallback((key: DashboardRunSortKey) => {
+    setRunSort((prev) => {
+      if (!prev || prev.key !== key) return { key, dir: "asc" };
+      return { key, dir: prev.dir === "asc" ? "desc" : "asc" };
+    });
+    setPageIndex(0);
+  }, []);
+
+  const pageCount = Math.max(1, Math.ceil(sortedTabRows.length / pageSize));
   const safePage = Math.min(pageIndex, pageCount - 1);
   const pageStart = safePage * pageSize;
-  const pageSlice = tabFiltered.slice(pageStart, pageStart + pageSize);
-  const rangeStart = tabFiltered.length === 0 ? 0 : pageStart + 1;
-  const rangeEnd = Math.min(pageStart + pageSize, tabFiltered.length);
+  const pageSlice = sortedTabRows.slice(pageStart, pageStart + pageSize);
+  const rangeStart = sortedTabRows.length === 0 ? 0 : pageStart + 1;
+  const rangeEnd = Math.min(pageStart + pageSize, sortedTabRows.length);
 
   useEffect(() => {
-    const maxPage = Math.max(0, Math.ceil(tabFiltered.length / pageSize) - 1);
+    const maxPage = Math.max(0, Math.ceil(sortedTabRows.length / pageSize) - 1);
     setPageIndex((i) => (i > maxPage ? maxPage : i));
-  }, [tabFiltered.length, pageSize]);
+  }, [sortedTabRows.length, pageSize]);
 
   if (!vendorName.trim()) {
     return (
@@ -214,6 +246,7 @@ export function VendorProfileContent() {
             value={period}
             onValueChange={(v) => {
               setPeriod(v as PeriodFilter);
+              setRunSort(null);
               setPageIndex(0);
             }}
           >
@@ -454,12 +487,17 @@ export function VendorProfileContent() {
         tab={tab}
         onTabChange={(t) => {
           setTab(t);
+          setRunSort(null);
           setPageIndex(0);
         }}
+        tabCounts={tabCounts}
         showVendorSelect={false}
         vendorFilter="all"
         onVendorFilterChange={() => {}}
         vendorOptions={["all"]}
+        sortKey={runSort?.key ?? null}
+        sortDir={runSort?.dir}
+        onSortColumn={handleSortColumn}
         pageSlice={pageSlice}
         safePage={safePage}
         pageCount={pageCount}
@@ -472,7 +510,7 @@ export function VendorProfileContent() {
         onPageNext={() => setPageIndex(safePage + 1)}
         rangeStart={rangeStart}
         rangeEnd={rangeEnd}
-        totalRowCount={tabFiltered.length}
+        totalRowCount={sortedTabRows.length}
       />
 
       {!loading && vendorRuns.length === 0 ? (

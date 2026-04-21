@@ -6,6 +6,9 @@
  *   npx tsx scripts/kognitos-read-automation-output.ts
  *   npx tsx scripts/kognitos-read-automation-output.ts --automation tr11jt5jBCZsvPlEvPs7D
  *   npx tsx scripts/kognitos-read-automation-output.ts --org WSnn3S9kmdEGSEl2NRAzC --workspace zLUS9C5wvG6XZQLLrYMGO --automation tr11jt5jBCZsvPlEvPs7D --runs 2
+ *
+ * Single run (GET …/automations/{automation}/runs/{runId} — full API JSON):
+ *   npx tsx scripts/kognitos-read-automation-output.ts --automation tr11jt5jBCZsvPlEvPs7D --run zF3TfDAWWUvd0qwsXJy7r
  */
 
 import { config } from "dotenv";
@@ -59,6 +62,7 @@ async function main() {
   const ws = arg("--workspace") || process.env.KOGNITOS_WORKSPACE_ID || "";
   const automation =
     arg("--automation") || process.env.KOGNITOS_AUTOMATION_ID || "";
+  const singleRunId = arg("--run");
   const runCount = Math.min(
     10,
     Math.max(1, parseInt(arg("--runs") ?? "3", 10) || 3),
@@ -78,6 +82,14 @@ async function main() {
   const enc = encodeURIComponent;
   const autoPath = `/api/v1/organizations/${enc(org)}/workspaces/${enc(ws)}/automations/${enc(automation)}`;
   const runsPath = `${autoPath}/runs?page_size=${runCount}`;
+
+  if (singleRunId) {
+    const runPath = `${autoPath}/runs/${enc(singleRunId)}`;
+    console.error("=== GET Run (raw API JSON) ===", runPath);
+    const runJson = await kognitosFetch(runPath);
+    console.log(JSON.stringify(runJson, null, 2));
+    return;
+  }
 
   console.log("=== GET Automation (metadata) ===\n");
   const automationJson = (await kognitosFetch(autoPath)) as Record<
