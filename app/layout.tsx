@@ -3,9 +3,9 @@ import "./globals.css";
 import { AuthProvider } from "@/lib/auth-context";
 
 export const metadata: Metadata = {
-  title: "PriorAuth - Prior Authorization Management",
+  title: "Finance Automation Center of Excellence",
   description:
-    "Streamline prior authorization workflows with intelligent automation",
+    "Streamline finance automation workflows with intelligent automation",
 };
 
 export default function RootLayout({
