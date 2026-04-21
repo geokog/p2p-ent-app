@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
 import {
   Card,
@@ -17,17 +17,19 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useAuth } from "@/lib/auth-context";
+import { kognitosDashboardFetch } from "@/lib/kognitos/kognitos-dashboard-fetch";
+import { parseLogisticsRowsJson } from "@/lib/logistics/parse-logistics-rows";
+import type { LogisticsRow, LogisticsTri } from "@/lib/logistics/logistics-row";
 import { cn } from "@/lib/utils";
 import { DispatchDateCell, logisticsCellEditClass } from "./dispatch-date-cell";
-import {
-  LOGISTICS_ROWS,
-  type LogisticsRow,
-  type LogisticsTri,
-} from "./logistics-static-data";
-import {
-  loadLogisticsRowsFromStorage,
-  saveLogisticsRowsToStorage,
-} from "./logistics-storage";
+import { LOGISTICS_ROWS } from "./logistics-static-data";
+
+const PERSIST_DEBOUNCE_MS = 450;
+
+function cloneDefaults(): LogisticsRow[] {
+  return LOGISTICS_ROWS.map((r) => ({ ...r }));
+}
 
 function triToCellValue(t: LogisticsTri): string {
   if (t === null) return "";
@@ -99,14 +101,100 @@ function fieldAriaLabel(
 }
 
 export function LogisticsGridTable() {
-  const [rows, setRows] = useState<LogisticsRow[]>(() =>
-    LOGISTICS_ROWS.map((r) => ({ ...r })),
+  const { user } = useAuth();
+  const role = user?.role;
+
+  const [rows, setRows] = useState<LogisticsRow[]>(cloneDefaults);
+  const [readyToPersist, setReadyToPersist] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const skipNextPersist = useRef(false);
+
+  const persistRows = useCallback(
+    async (snapshot: LogisticsRow[]) => {
+      if (!role) return;
+      try {
+        const res = await kognitosDashboardFetch("/api/logistics/rows", {
+          method: "PUT",
+          role,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rows: snapshot }),
+        });
+        const json = (await res.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        if (!res.ok) {
+          setSaveError(json.error ?? `Save failed (${res.status})`);
+          return;
+        }
+        setSaveError(null);
+      } catch (e) {
+        setSaveError(e instanceof Error ? e.message : "save_failed");
+      }
+    },
+    [role],
   );
 
   useEffect(() => {
-    const stored = loadLogisticsRowsFromStorage();
-    if (stored) setRows(stored);
-  }, []);
+    if (!role) return;
+    let cancelled = false;
+    setLoadError(null);
+    void (async () => {
+      try {
+        const res = await kognitosDashboardFetch("/api/logistics/rows", {
+          method: "GET",
+          role,
+        });
+        const json = (await res.json()) as {
+          rows?: unknown;
+          error?: string;
+        };
+        if (cancelled) return;
+        if (!res.ok) {
+          setLoadError(json.error ?? `Load failed (${res.status})`);
+          return;
+        }
+        if (json.rows != null) {
+          const parsed = parseLogisticsRowsJson(json.rows);
+          if (parsed.ok) {
+            if (parsed.rows.length > 0) {
+              setRows(parsed.rows);
+              skipNextPersist.current = true;
+            } else {
+              skipNextPersist.current = false;
+            }
+          } else {
+            skipNextPersist.current = false;
+          }
+        } else {
+          skipNextPersist.current = false;
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setLoadError(e instanceof Error ? e.message : "load_failed");
+        }
+      } finally {
+        if (!cancelled) {
+          setReadyToPersist(true);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [role]);
+
+  useEffect(() => {
+    if (!readyToPersist || !role) return;
+    if (skipNextPersist.current) {
+      skipNextPersist.current = false;
+      return;
+    }
+    const id = window.setTimeout(() => {
+      void persistRows(rows);
+    }, PERSIST_DEBOUNCE_MS);
+    return () => window.clearTimeout(id);
+  }, [rows, readyToPersist, role, persistRows]);
 
   function patchRow(index: number, patch: Partial<LogisticsRow>) {
     setRows((prev) =>
@@ -114,15 +202,10 @@ export function LogisticsGridTable() {
     );
   }
 
-  /** Outbound ID is persisted to localStorage on every change (auto-save). */
   function patchOutboundId(index: number, outboundId: string) {
-    setRows((prev) => {
-      const next = prev.map((r, i) =>
-        i === index ? { ...r, outboundId } : r,
-      );
-      saveLogisticsRowsToStorage(next);
-      return next;
-    });
+    setRows((prev) =>
+      prev.map((r, i) => (i === index ? { ...r, outboundId } : r)),
+    );
   }
 
   return (
@@ -138,9 +221,23 @@ export function LogisticsGridTable() {
         <CardHeader>
           <CardTitle>Outbound shipments</CardTitle>
           <CardDescription>
-            Carrier, trailer, and dispatch status. Outbound ID edits save
-            automatically in this browser.
+            Edits are saved automatically to the database (debounced). Requires
+            Supabase and a deployed{" "}
+            <code className="rounded bg-muted px-1 py-0.5 text-xs">
+              logistics_grid_state
+            </code>{" "}
+            migration.
           </CardDescription>
+          {loadError ? (
+            <p className="text-sm text-destructive">
+              Could not load saved rows: {loadError}
+            </p>
+          ) : null}
+          {saveError ? (
+            <p className="text-sm text-destructive">
+              Could not save: {saveError}
+            </p>
+          ) : null}
         </CardHeader>
         <CardContent className="px-0 pb-4">
           <div className="mx-4 rounded-lg border bg-background">

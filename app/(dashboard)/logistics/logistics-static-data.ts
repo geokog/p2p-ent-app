@@ -1,19 +1,6 @@
-export type LogisticsTri = boolean | null;
+import type { LogisticsRow } from "@/lib/logistics/logistics-row";
 
-export type LogisticsRow = {
-  outboundId: string;
-  carrierId: string;
-  trailerId: string;
-  trailerType: string;
-  outboundTypeId: string;
-  transportationTypeId: string;
-  live: LogisticsTri;
-  completed: LogisticsTri;
-  dispatch: string;
-  plannedArrival: string;
-  arrived: LogisticsTri;
-  ignore: LogisticsTri;
-};
+export type { LogisticsRow, LogisticsTri } from "@/lib/logistics/logistics-row";
 
 /** Static sample rows for the logistics grid. */
 export const LOGISTICS_ROWS: LogisticsRow[] = [
