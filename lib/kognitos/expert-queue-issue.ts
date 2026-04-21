@@ -461,10 +461,98 @@ export function expertQueueIssueBadgeFromWhySummary(
   return "other";
 }
 
+/**
+ * Dashboard-aligned validation dimensions (Runs Analyzed DOC / COA / VAL / QTY).
+ * A run may carry several tags when multiple checks fail.
+ */
+export type ExpertQueueValidationTag =
+  | "document_mismatch"
+  | "coa_mismatch"
+  | "value_mismatch"
+  | "quantity_mismatch";
+
+export const EXPERT_QUEUE_VALIDATION_TAG_LABEL: Record<
+  ExpertQueueValidationTag,
+  string
+> = {
+  document_mismatch: "Document mismatch",
+  coa_mismatch: "COA mismatch / missing",
+  value_mismatch: "Value mismatch",
+  quantity_mismatch: "Quantity mismatch",
+};
+
+/**
+ * Derives validation-queue tags from the same `inferValidationChecks` logic as the dashboard.
+ * Callers should only use the result when the run has reached `state.completed` in the payload,
+ * so tags are not shown for in-flight runs where inferred flags are not yet reliable.
+ */
+export function validationTagsFromDashboardChecks(checks: {
+  docOk: boolean;
+  qtyOk: boolean;
+  valOk: boolean;
+  coaOk: boolean;
+}): ExpertQueueValidationTag[] {
+  const t: ExpertQueueValidationTag[] = [];
+  if (!checks.docOk) t.push("document_mismatch");
+  if (!checks.coaOk) t.push("coa_mismatch");
+  if (!checks.valOk) t.push("value_mismatch");
+  if (!checks.qtyOk) t.push("quantity_mismatch");
+  return t;
+}
+
+export function expertQueueWhySummaryForValidationTags(
+  tags: ExpertQueueValidationTag[],
+): string {
+  const clauses: string[] = [];
+  if (tags.includes("document_mismatch")) {
+    clauses.push(
+      "supplier invoice or PO identifiers do not line up with SAP (document mismatch)",
+    );
+  }
+  if (tags.includes("coa_mismatch")) {
+    clauses.push(
+      "the certificate of analysis (COA) did not meet expectations or is missing",
+    );
+  }
+  if (tags.includes("value_mismatch")) {
+    clauses.push(
+      "invoice amounts or values do not match the expected PO or GR totals (value mismatch)",
+    );
+  }
+  if (tags.includes("quantity_mismatch")) {
+    clauses.push(
+      "quantities or units on the invoice do not match the purchase order or receipt (quantity mismatch)",
+    );
+  }
+  if (clauses.length === 0) return "";
+  const tail = clauses[clauses.length - 1]!;
+  const body =
+    clauses.length === 1
+      ? tail
+      : `${clauses.slice(0, -1).join(", ")}, and ${tail}`;
+  return `Automated validation flagged that ${body}. Review the comparison in the run report and correct master data or supporting documents before retrying.`;
+}
+
+export const whyThisMattersValidationQueue =
+  "These runs still fail one or more P2P validation checks used on the Runs Analyzed dashboard, so posting or payment should not proceed until they are resolved.";
+
+export function resolutionStepsForValidationQueue(): string[] {
+  return [
+    "Open the run in Kognitos or review the validation report in this app to see expected vs. actual values.",
+    "Correct documents, COA, quantities, or amounts as needed, then follow your process to re-run or clear the automation.",
+    "Confirm on the Runs Analyzed dashboard that DOC, QTY, VAL, and COA all pass before relying on the outcome.",
+  ];
+}
+
 /** Row returned by GET /api/kognitos/expert-queue for the Expert Queue UI. */
 export type ExpertQueueRow = {
   runId: string;
   automationDisplayName: string;
+  /** Vendor / supplier display name from the same normalization as dashboard runs. */
+  vendor: string;
+  invoiceNumber: string;
+  /** Parsed invoice line value in USD. */
+  value: number;
   stateLabel: string;
   issueKind: ExpertQueueIssueKind;
   /** Plain-language “why care” copy for the page (no technical jargon). */
@@ -472,6 +560,11 @@ export type ExpertQueueRow = {
   whySummary: string;
   /** One category label for the run (see `ExpertQueueIssueBadge`). */
   issueBadge: ExpertQueueIssueBadge;
+  /**
+   * When any DOC / COA / VAL / QTY check fails per dashboard `inferValidationChecks`,
+   * lists which dimensions failed (may coexist with `issueBadge` from Kognitos state).
+   */
+  validationTags?: ExpertQueueValidationTag[];
   referenceId?: string;
   locationHint?: string;
   resolutionSteps: string[];

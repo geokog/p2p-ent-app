@@ -9,14 +9,21 @@ import {
   ArrowUpDown,
   Calendar,
   Check,
-  Eye,
+  ExternalLink,
   Mail,
+  MoreHorizontal,
   Play,
   RefreshCw,
   X,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Card,
   CardContent,
@@ -625,56 +632,82 @@ export function KognitosRunsAnalyzedTable({
                                 )}
                               </TableCell>
                               <TableCell className="text-right">
-                                <div className="flex justify-end gap-0.5">
+                                <div className="flex justify-end items-center gap-1.5">
                                   {runUrl ? (
                                     <Button
                                       type="button"
-                                      size="icon"
                                       variant="outline"
-                                      className="size-8 rounded-full border-border"
+                                      size="sm"
+                                      className="h-8 gap-1.5 whitespace-nowrap rounded-full border-border bg-background px-3 font-normal shadow-none"
                                       asChild
-                                      aria-label="View run results in Kognitos (opens in new tab)"
                                     >
                                       <a
                                         href={runUrl}
                                         target="_blank"
                                         rel="noopener noreferrer"
+                                        aria-label="Open run in Kognitos (opens in new tab)"
                                       >
-                                        <Eye className="size-4" />
+                                        Open run
+                                        <ExternalLink
+                                          className="size-3.5 shrink-0 opacity-70"
+                                          aria-hidden
+                                        />
                                       </a>
                                     </Button>
                                   ) : (
                                     <Button
                                       type="button"
-                                      size="icon"
                                       variant="outline"
-                                      className="size-8 rounded-full"
+                                      size="sm"
+                                      className="h-8 gap-1.5 whitespace-nowrap rounded-full border-border bg-background px-3 font-normal shadow-none"
                                       disabled
                                       aria-label="Kognitos run link unavailable"
                                     >
-                                      <Eye className="size-4" />
+                                      Open run
+                                      <ExternalLink
+                                        className="size-3.5 shrink-0 opacity-40"
+                                        aria-hidden
+                                      />
                                     </Button>
                                   )}
-                                  <Button
-                                    type="button"
-                                    size="icon"
-                                    variant="outline"
-                                    className="size-8 rounded-full"
-                                    aria-label="Message (placeholder)"
-                                    disabled
-                                  >
-                                    <Mail className="size-4" />
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    size="icon"
-                                    variant="outline"
-                                    className="size-8 rounded-full"
-                                    aria-label="Re-analyze in Kognitos"
-                                    onClick={() => setReanalyzeRun(row)}
-                                  >
-                                    <Play className="size-4" />
-                                  </Button>
+                                  <DropdownMenu>
+                                    <DropdownMenuTrigger asChild>
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="icon"
+                                        className="size-8 shrink-0 rounded-full border-border bg-background shadow-none"
+                                        aria-label="More actions"
+                                      >
+                                        <MoreHorizontal
+                                          className="size-4"
+                                          aria-hidden
+                                        />
+                                      </Button>
+                                    </DropdownMenuTrigger>
+                                    <DropdownMenuContent align="end" sideOffset={6}>
+                                      <DropdownMenuItem
+                                        disabled
+                                        className="gap-2"
+                                      >
+                                        <Mail
+                                          className="size-4 opacity-60"
+                                          aria-hidden
+                                        />
+                                        Email supplier
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem
+                                        className="gap-2"
+                                        onSelect={() => setReanalyzeRun(row)}
+                                      >
+                                        <RefreshCw
+                                          className="size-4 opacity-60"
+                                          aria-hidden
+                                        />
+                                        Rerun automation
+                                      </DropdownMenuItem>
+                                    </DropdownMenuContent>
+                                  </DropdownMenu>
                                 </div>
                               </TableCell>
                             </TableRow>

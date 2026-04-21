@@ -21,6 +21,18 @@ export function kognitosRunStatusFromPayload(
   return "Executing";
 }
 
+/**
+ * True when `payload.state.completed` is present (run finished the automation path
+ * with a completed record). Used to gate validation tags: until then, inferred
+ * DOC/QTY/VAL/COA flags are not treated as confirmed “wrong submitted values”.
+ */
+export function kognitosRunReachedCompletedState(
+  payload: Record<string, unknown>,
+): boolean {
+  const s = runStateObject(payload);
+  return Boolean(s?.completed);
+}
+
 /** ISO timestamp when the run reached completed state, if applicable. */
 export function kognitosRunCompletedAtIso(
   payload: Record<string, unknown>,

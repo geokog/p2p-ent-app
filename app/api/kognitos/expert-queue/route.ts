@@ -4,11 +4,20 @@ import { getKognitosAutomationRunResultsUrl } from "@/lib/kognitos/automation-de
 import {
   type ExpertQueueRow,
   expertQueueIssueBadgeFromWhySummary,
+  expertQueueWhySummaryForValidationTags,
   parseExpertQueueIssue,
   resolutionStepsForIssue,
+  resolutionStepsForValidationQueue,
   stateLabelForIssue,
+  validationTagsFromDashboardChecks,
   whyThisMattersPlainLanguage,
+  whyThisMattersValidationQueue,
 } from "@/lib/kognitos/expert-queue-issue";
+import {
+  inferValidationChecks,
+  normalizeKognitosRowForDashboard,
+} from "@/lib/kognitos/normalize-dashboard-run";
+import { kognitosRunReachedCompletedState } from "@/lib/kognitos/run-display";
 import { supabaseAdmin } from "@/lib/supabase";
 
 const MAX_ROWS = 500;
@@ -81,7 +90,13 @@ export async function GET() {
         ? (row.payload as Record<string, unknown>)
         : {};
     const issue = parseExpertQueueIssue(payload);
-    if (!issue) continue;
+    const checks = inferValidationChecks(payload);
+    const validationEligible = kognitosRunReachedCompletedState(payload);
+    const validationTags = validationEligible
+      ? validationTagsFromDashboardChecks(checks)
+      : [];
+
+    if (!issue && validationTags.length === 0) continue;
 
     const autoUuid = row.kognitos_automation_id as string | null | undefined;
     const extId =
@@ -106,20 +121,54 @@ export async function GET() {
           ? String(row.create_time)
           : null;
 
+    const automationDisplayName =
+      autoUuid != null ? automationNameById.get(String(autoUuid)) ?? "—" : "—";
+    const normalized = normalizeKognitosRowForDashboard({
+      id: String(row.id),
+      payload,
+      update_time: row.update_time,
+      create_time: row.create_time,
+      automation_display_name:
+        autoUuid != null ? automationNameById.get(String(autoUuid)) ?? null : null,
+    });
+
+    if (issue) {
+      items.push({
+        runId: String(row.id),
+        automationDisplayName,
+        vendor: normalized.vendor,
+        invoiceNumber: normalized.invoiceNumber,
+        value: normalized.value,
+        stateLabel: stateLabelForIssue(issue.kind),
+        issueKind: issue.kind,
+        whyItMatters: whyThisMattersPlainLanguage(issue.kind),
+        whySummary: issue.whySummary,
+        issueBadge: expertQueueIssueBadgeFromWhySummary(issue.whySummary),
+        validationTags:
+          validationTags.length > 0 ? validationTags : undefined,
+        referenceId: issue.referenceId,
+        locationHint: issue.locationHint,
+        resolutionSteps: resolutionStepsForIssue(issue),
+        kognitosRunUrl,
+        updateTime,
+        createTime,
+      });
+      continue;
+    }
+
     items.push({
       runId: String(row.id),
-      automationDisplayName:
-        autoUuid != null
-          ? automationNameById.get(String(autoUuid)) ?? "—"
-          : "—",
-      stateLabel: stateLabelForIssue(issue.kind),
-      issueKind: issue.kind,
-      whyItMatters: whyThisMattersPlainLanguage(issue.kind),
-      whySummary: issue.whySummary,
-      issueBadge: expertQueueIssueBadgeFromWhySummary(issue.whySummary),
-      referenceId: issue.referenceId,
-      locationHint: issue.locationHint,
-      resolutionSteps: resolutionStepsForIssue(issue),
+      automationDisplayName,
+      vendor: normalized.vendor,
+      invoiceNumber: normalized.invoiceNumber,
+      value: normalized.value,
+      stateLabel: "Needs validation review",
+      issueKind: "awaiting_guidance",
+      whyItMatters: whyThisMattersValidationQueue,
+      whySummary: expertQueueWhySummaryForValidationTags(validationTags),
+      issueBadge: "other",
+      validationTags,
+      resolutionSteps: resolutionStepsForValidationQueue(),
       kognitosRunUrl,
       updateTime,
       createTime,
