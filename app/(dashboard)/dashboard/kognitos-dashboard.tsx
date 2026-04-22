@@ -63,7 +63,7 @@ const DEMO_BLOCKED_ISSUE_TOTAL =
   DEMO_BLOCKED_ISSUE_USD.coa +
   DEMO_BLOCKED_ISSUE_USD.other;
 
-const DEMO_TOP_VENDOR_NAME = "ClearPath Laboratory Materials Inc.";
+const DEMO_TOP_VENDOR_NAME = "ClearPath Laboratory";
 const DEMO_TOP_VENDOR_RUN_COUNT = 28;
 const DEMO_TOP_VENDOR_SUM_USD = 672_000;
 
