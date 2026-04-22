@@ -9,8 +9,15 @@ import {
   Clock,
   ExternalLink,
   FlaskConical,
+  MoreHorizontal,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Card,
   CardContent,
@@ -37,6 +44,65 @@ import {
   sortKognitosDashboardRunsByColumn,
 } from "@/lib/kognitos/normalize-dashboard-run";
 import { cn } from "@/lib/utils";
+
+const DEMO_DATA_STORAGE_KEY = "kognitos-dashboard-demo-data";
+const DEMO_ACTION_REQUIRED_COUNT = 27;
+const DEMO_ACTION_REQUIRED_BODY =
+  "$347K in pending payments are blocked across PO, goods receipt, COA, and invoice checks.";
+
+/** Matches Action Required tile: $347K total, split across the four issue rows. */
+const DEMO_BLOCKED_ISSUE_USD = {
+  p2p: 120_000,
+  price: 95_000,
+  coa: 87_000,
+  other: 45_000,
+} as const;
+const DEMO_BLOCKED_ISSUE_TOTAL =
+  DEMO_BLOCKED_ISSUE_USD.p2p +
+  DEMO_BLOCKED_ISSUE_USD.price +
+  DEMO_BLOCKED_ISSUE_USD.coa +
+  DEMO_BLOCKED_ISSUE_USD.other;
+
+const DEMO_TOP_VENDOR_NAME = "ClearPath Laboratory Materials Inc.";
+const DEMO_TOP_VENDOR_RUN_COUNT = 28;
+const DEMO_TOP_VENDOR_SUM_USD = 672_000;
+
+const DEMO_TOP_ISSUE_TYPE_TITLE = "PO Missmatch";
+const DEMO_TOP_ISSUE_TYPE_RUN_COUNT = 12;
+
+/** Runs Analyzed table + vendor filter when demo mode is on. */
+const DEMO_RUNS_ANALYZED_VENDORS = [
+  "BioPure Chemicals Inc.",
+  "Apex Industrial Chemicals Inc.",
+  "Northstar BioSolutions LLC",
+  "Meridian Chemical Supply Co.",
+  "ClearPath Laboratory Materials Inc.",
+  "Vector Process Chemicals Ltd.",
+  "Summit BioPharma Supplies Inc.",
+  "Evergreen Specialty Chemicals LLC.",
+  "Titan Molecular Products Co.",
+  "BlueRock Chemical Industries Inc.",
+] as const;
+
+/** USD amounts for Runs Analyzed (row order when Demo Data is on). */
+const DEMO_RUNS_ANALYZED_VALUES_USD = [
+  114_800, 112_000, 94_750, 81_300, 67_900, 123_670, 41_800, 29_650, 18_400,
+  14_000,
+] as const;
+
+/** Cycle demo vendor + value by row index (row 0 = BioPure + $114,800 when filter is All). */
+function assignDemoRunsAnalyzedTableFields(
+  runs: KognitosDashboardRun[],
+): KognitosDashboardRun[] {
+  const nv = DEMO_RUNS_ANALYZED_VENDORS.length;
+  const nd = DEMO_RUNS_ANALYZED_VALUES_USD.length;
+  return runs.map((r, i) => ({
+    ...r,
+    vendor: DEMO_RUNS_ANALYZED_VENDORS[i % nv],
+    vendorIsFromDedicatedKeys: true,
+    value: DEMO_RUNS_ANALYZED_VALUES_USD[i % nd],
+  }));
+}
 
 const currencyFmt = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -323,6 +389,7 @@ export function KognitosRunsDashboard() {
   const [runs, setRuns] = useState<KognitosDashboardRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [demoDataEnabled, setDemoDataEnabled] = useState(false);
 
   const loadRuns = useCallback(async () => {
     setLoading(true);
@@ -362,6 +429,32 @@ export function KognitosRunsDashboard() {
   }, []);
 
   useEffect(() => {
+    try {
+      if (localStorage.getItem(DEMO_DATA_STORAGE_KEY) === "1") {
+        setDemoDataEnabled(true);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const setDemoData = useCallback((enabled: boolean) => {
+    setDemoDataEnabled(enabled);
+    if (enabled) {
+      setVendorFilter("all");
+    }
+    try {
+      if (enabled) {
+        localStorage.setItem(DEMO_DATA_STORAGE_KEY, "1");
+      } else {
+        localStorage.removeItem(DEMO_DATA_STORAGE_KEY);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
     void loadRuns();
   }, [loadRuns]);
 
@@ -384,9 +477,12 @@ export function KognitosRunsDashboard() {
   );
 
   const vendorOptions = useMemo(() => {
+    if (demoDataEnabled) {
+      return ["all", ...DEMO_RUNS_ANALYZED_VENDORS];
+    }
     const set = new Set(periodRuns.map((r) => r.vendor));
     return ["all", ...[...set].sort((a, b) => a.localeCompare(b))];
-  }, [periodRuns]);
+  }, [periodRuns, demoDataEnabled]);
 
   const kpis = useMemo(() => {
     const processed = periodRuns.filter(runMeetsTotalApprovedPaymentsRequirements);
@@ -440,6 +536,20 @@ export function KognitosRunsDashboard() {
     return b.p2p + b.coa + b.price + b.other;
   }, [blockedByIssue]);
 
+  const blockedChartByIssue = useMemo(
+    () => (demoDataEnabled ? { ...DEMO_BLOCKED_ISSUE_USD } : blockedByIssue),
+    [demoDataEnabled, blockedByIssue],
+  );
+
+  const blockedChartIssueTotal = useMemo(
+    () => (demoDataEnabled ? DEMO_BLOCKED_ISSUE_TOTAL : blockedIssueTotal),
+    [demoDataEnabled, blockedIssueTotal],
+  );
+
+  const blockedChartExceptionCount = demoDataEnabled
+    ? DEMO_ACTION_REQUIRED_COUNT
+    : kpis.pendingCount;
+
   const healthyValuePct = useMemo(() => {
     const vPass = kpis.approvedTotal;
     const vBlock = kpis.pendingTotal;
@@ -481,9 +591,15 @@ export function KognitosRunsDashboard() {
   }, [periodRuns, tab]);
 
   const runsForTabCounts = useMemo(() => {
+    if (demoDataEnabled) {
+      const sorted = sortDashboardRunsForDisplay(periodRuns);
+      const labeled = assignDemoRunsAnalyzedTableFields(sorted);
+      if (vendorFilter === "all") return labeled;
+      return labeled.filter((r) => r.vendor === vendorFilter);
+    }
     if (vendorFilter === "all") return periodRuns;
     return periodRuns.filter((r) => r.vendor === vendorFilter);
-  }, [periodRuns, vendorFilter]);
+  }, [periodRuns, vendorFilter, demoDataEnabled]);
 
   const tabCounts = useMemo(
     () => ({
@@ -495,18 +611,35 @@ export function KognitosRunsDashboard() {
     [runsForTabCounts],
   );
 
-  const tableRows = useMemo(() => {
+  const runsAnalyzedRows = useMemo(() => {
+    const sorted = sortDashboardRunsForDisplay(tabFiltered);
+
+    if (!demoDataEnabled) {
+      const vendorFiltered =
+        vendorFilter === "all"
+          ? sorted
+          : sorted.filter((r) => r.vendor === vendorFilter);
+      return sortKognitosDashboardRunsByColumn(vendorFiltered, runSort);
+    }
+
+    const preLabeled = assignDemoRunsAnalyzedTableFields(sorted);
     const filtered =
       vendorFilter === "all"
-        ? tabFiltered
-        : tabFiltered.filter((r) => r.vendor === vendorFilter);
-    return sortDashboardRunsForDisplay(filtered);
-  }, [tabFiltered, vendorFilter]);
+        ? preLabeled
+        : preLabeled.filter((r) => r.vendor === vendorFilter);
+    const columnSorted = sortKognitosDashboardRunsByColumn(filtered, runSort);
 
-  const sortedTableRows = useMemo(
-    () => sortKognitosDashboardRunsByColumn(tableRows, runSort),
-    [tableRows, runSort],
-  );
+    if (vendorFilter === "all") {
+      return assignDemoRunsAnalyzedTableFields(columnSorted);
+    }
+    const nd = DEMO_RUNS_ANALYZED_VALUES_USD.length;
+    return columnSorted.map((r, i) => ({
+      ...r,
+      vendor: vendorFilter,
+      vendorIsFromDedicatedKeys: true,
+      value: DEMO_RUNS_ANALYZED_VALUES_USD[i % nd],
+    }));
+  }, [tabFiltered, vendorFilter, demoDataEnabled, runSort]);
 
   const handleSortColumn = useCallback((key: DashboardRunSortKey) => {
     setRunSort((prev) => {
@@ -516,24 +649,47 @@ export function KognitosRunsDashboard() {
     setPageIndex(0);
   }, []);
 
-  const pageCount = Math.max(1, Math.ceil(sortedTableRows.length / pageSize));
+  const pageCount = Math.max(1, Math.ceil(runsAnalyzedRows.length / pageSize));
   const safePage = Math.min(pageIndex, pageCount - 1);
   const pageStart = safePage * pageSize;
-  const pageSlice = sortedTableRows.slice(pageStart, pageStart + pageSize);
-  const rangeStart = sortedTableRows.length === 0 ? 0 : pageStart + 1;
-  const rangeEnd = Math.min(pageStart + pageSize, sortedTableRows.length);
+  const pageSlice = runsAnalyzedRows.slice(pageStart, pageStart + pageSize);
+  const rangeStart = runsAnalyzedRows.length === 0 ? 0 : pageStart + 1;
+  const rangeEnd = Math.min(pageStart + pageSize, runsAnalyzedRows.length);
 
   useEffect(() => {
-    const maxPage = Math.max(0, Math.ceil(sortedTableRows.length / pageSize) - 1);
+    const maxPage = Math.max(0, Math.ceil(runsAnalyzedRows.length / pageSize) - 1);
     setPageIndex((i) => (i > maxPage ? maxPage : i));
-  }, [sortedTableRows.length, pageSize]);
+  }, [runsAnalyzedRows.length, pageSize]);
 
   return (
     <div className="space-y-6">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
-            <p className="text-muted-foreground">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1">
+              <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    className="size-7 shrink-0 text-muted-foreground/50 hover:text-muted-foreground"
+                    aria-label="Dashboard options"
+                  >
+                    <MoreHorizontal className="size-4" strokeWidth={2} />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-56" sideOffset={4}>
+                  <DropdownMenuCheckboxItem
+                    checked={demoDataEnabled}
+                    onCheckedChange={(c) => setDemoData(!!c)}
+                  >
+                    Enable Demo Data
+                  </DropdownMenuCheckboxItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+            <p className="mt-1 text-muted-foreground">
               Validation health and triage from stored Kognitos runs for the
               selected period.
             </p>
@@ -584,16 +740,19 @@ export function KognitosRunsDashboard() {
                   Action required
                 </p>
                 <p className="text-4xl font-bold leading-none tracking-tight text-foreground sm:text-5xl">
-                  {expertQueueCount !== null
-                    ? expertQueueCount
-                    : kpis.pendingCount}
+                  {demoDataEnabled
+                    ? DEMO_ACTION_REQUIRED_COUNT
+                    : expertQueueCount !== null
+                      ? expertQueueCount
+                      : kpis.pendingCount}
                 </p>
                 <p className="text-base font-semibold leading-snug text-foreground">
                   P2P exceptions need expert review.
                 </p>
                 <p className="max-w-prose text-sm leading-relaxed text-muted-foreground">
-                  {formatCompactUsd(kpis.pendingTotal)} in pending payments are
-                  blocked across PO, goods receipt, COA, and invoice checks.
+                  {demoDataEnabled
+                    ? DEMO_ACTION_REQUIRED_BODY
+                    : `${formatCompactUsd(kpis.pendingTotal)} in pending payments are blocked across PO, goods receipt, COA, and invoice checks.`}
                 </p>
                 <div className="flex flex-wrap items-center gap-2 pt-1">
                   <Button
@@ -631,44 +790,51 @@ export function KognitosRunsDashboard() {
           >
             <CardContent className="px-5 py-5">
               <div className="flex flex-col gap-6 sm:flex-row sm:items-start sm:gap-8">
-                <DonutHealthyGauge healthyPct={healthyValuePct} />
+                <DonutHealthyGauge
+                  healthyPct={demoDataEnabled ? 93 : healthyValuePct}
+                />
                 <div className="min-w-0 flex-1 space-y-5">
                   <div>
                     <h2 className="text-lg font-bold tracking-tight text-foreground">
                       Blocked value by issue
                     </h2>
                     <p className="mt-1.5 text-sm text-muted-foreground">
-                      {formatCompactUsd(kpis.pendingTotal)} total blocked across{" "}
-                      {kpis.pendingCount}{" "}
-                      {kpis.pendingCount === 1 ? "exception" : "exceptions"}.
+                      {formatCompactUsd(
+                        demoDataEnabled ? DEMO_BLOCKED_ISSUE_TOTAL : kpis.pendingTotal,
+                      )}{" "}
+                      total blocked across {blockedChartExceptionCount}{" "}
+                      {blockedChartExceptionCount === 1
+                        ? "exception"
+                        : "exceptions"}
+                      .
                     </p>
                   </div>
                   <div className="space-y-3.5">
                     <BlockedIssueRow
-                      label="P2P 4-Way Match"
-                      value={blockedByIssue.p2p}
-                      total={blockedIssueTotal}
+                      label="PO Missmatch"
+                      value={blockedChartByIssue.p2p}
+                      total={blockedChartIssueTotal}
                       dotClass="bg-blue-500"
                       barClass="bg-blue-500"
                     />
                     <BlockedIssueRow
-                      label="COA Mismatch"
-                      value={blockedByIssue.coa}
-                      total={blockedIssueTotal}
+                      label="Price Variance"
+                      value={blockedChartByIssue.price}
+                      total={blockedChartIssueTotal}
+                      dotClass="bg-indigo-500 dark:bg-indigo-400"
+                      barClass="bg-indigo-500 dark:bg-indigo-400"
+                    />
+                    <BlockedIssueRow
+                      label="COA Issue"
+                      value={blockedChartByIssue.coa}
+                      total={blockedChartIssueTotal}
                       dotClass="bg-zinc-600 dark:bg-zinc-400"
                       barClass="bg-zinc-600 dark:bg-zinc-400"
                     />
                     <BlockedIssueRow
-                      label="Price Variance"
-                      value={blockedByIssue.price}
-                      total={blockedIssueTotal}
-                      dotClass="bg-orange-500"
-                      barClass="bg-orange-500"
-                    />
-                    <BlockedIssueRow
                       label="Other"
-                      value={blockedByIssue.other}
-                      total={blockedIssueTotal}
+                      value={blockedChartByIssue.other}
+                      total={blockedChartIssueTotal}
                       dotClass="bg-muted-foreground/40"
                       barClass="bg-muted-foreground/35"
                     />
@@ -741,12 +907,19 @@ export function KognitosRunsDashboard() {
                   Top Vendor
                 </p>
                 <p className="mt-1 line-clamp-2 text-lg font-bold leading-snug tracking-tight text-foreground">
-                  {kpis.topVendor.name}
+                  {demoDataEnabled ? DEMO_TOP_VENDOR_NAME : kpis.topVendor.name}
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {kpis.topVendor.count} runs ·{" "}
+                  {demoDataEnabled
+                    ? DEMO_TOP_VENDOR_RUN_COUNT
+                    : kpis.topVendor.count}{" "}
+                  runs ·{" "}
                   <span className="font-medium text-blue-600 dark:text-blue-400">
-                    {currencyFmt.format(kpis.topVendor.sum)}
+                    {currencyFmt.format(
+                      demoDataEnabled
+                        ? DEMO_TOP_VENDOR_SUM_USD
+                        : kpis.topVendor.sum,
+                    )}
                   </span>{" "}
                   total value
                 </p>
@@ -766,11 +939,14 @@ export function KognitosRunsDashboard() {
                   Top Issue Type
                 </p>
                 <p className="mt-1 line-clamp-2 text-lg font-bold leading-snug tracking-tight text-foreground">
-                  {kpis.topLine.title}
+                  {demoDataEnabled ? DEMO_TOP_ISSUE_TYPE_TITLE : kpis.topLine.title}
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
                   <span className="font-medium text-orange-600 dark:text-orange-400">
-                    {kpis.topLine.count} runs
+                    {demoDataEnabled
+                      ? DEMO_TOP_ISSUE_TYPE_RUN_COUNT
+                      : kpis.topLine.count}{" "}
+                    runs
                   </span>{" "}
                   (from user inputs)
                 </p>
@@ -848,7 +1024,9 @@ export function KognitosRunsDashboard() {
             setPageIndex(0);
           }}
           vendorOptions={vendorOptions}
-          vendorNameHref={vendorProfileHref}
+          vendorNameHref={(v) =>
+            demoDataEnabled ? null : vendorProfileHref(v)
+          }
           sortKey={runSort?.key ?? null}
           sortDir={runSort?.dir}
           onSortColumn={handleSortColumn}
@@ -864,7 +1042,7 @@ export function KognitosRunsDashboard() {
           onPageNext={() => setPageIndex(safePage + 1)}
           rangeStart={rangeStart}
           rangeEnd={rangeEnd}
-          totalRowCount={sortedTableRows.length}
+          totalRowCount={runsAnalyzedRows.length}
           description="Review and manage analyzed invoice runs."
         />
         </Card>
