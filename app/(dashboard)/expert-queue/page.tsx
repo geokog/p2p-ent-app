@@ -486,7 +486,7 @@ export default function ExpertQueuePage() {
                         rel="noopener noreferrer"
                         className="inline-flex items-center gap-1 text-sm font-medium text-blue-600 underline-offset-4 hover:underline dark:text-blue-400"
                       >
-                        Open in Kognitos
+                        Open Run
                         <ExternalLink className="size-3.5 shrink-0 opacity-80" />
                       </a>
                     ) : null}

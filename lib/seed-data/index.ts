@@ -44,8 +44,8 @@ export const users = [
   {
     id: "user-4",
     org_id: "org-1",
-    full_name: "David Brown",
-    email: "david.brown@acme.com",
+    full_name: "George Williams",
+    email: "george.williams@acme.com",
     role: "admin",
     avatar_url: null,
     created_at: "2026-01-03T10:15:00Z",

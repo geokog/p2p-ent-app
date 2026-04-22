@@ -126,12 +126,12 @@ export const DOMAIN = {
 
   // ── Navigation ────────────────────────────────────────────────
   navItems: [
-    { label: "Worklist", href: "/", icon: "ClipboardList" },
     { label: "Dashboard", href: "/dashboard", icon: "BarChart3" },
-    { label: "Vendors", href: "/vendors", icon: "Store" },
     { label: "Expert Queue", href: "/expert-queue", icon: "LifeBuoy" },
+    { label: "Vendors", href: "/vendors", icon: "Store" },
     { label: "Logistics", href: "/logistics", icon: "Truck" },
     { label: "Rules", href: "/rules", icon: "BookOpen" },
+    { label: "Worklist", href: "/", icon: "ClipboardList" },
     { label: "Notifications", href: "/notifications", icon: "Bell" },
     { label: "Settings", href: "/settings", icon: "Settings", roles: ["admin", "manager"] },
   ] satisfies NavItem[],

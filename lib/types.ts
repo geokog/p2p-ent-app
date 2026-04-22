@@ -202,8 +202,8 @@ export const MOCK_USERS: Record<UserRole, User> = {
   requester: {
     id: "usr_001",
     org_id: "org_001",
-    full_name: "Alice Johnson",
-    email: "alice.johnson@example.com",
+    full_name: "George Williams",
+    email: "george.williams+requester@example.com",
     role: "requester",
     avatar_url: "",
     created_at: "2025-01-15T08:00:00Z",
@@ -211,8 +211,8 @@ export const MOCK_USERS: Record<UserRole, User> = {
   reviewer: {
     id: "usr_002",
     org_id: "org_001",
-    full_name: "Bob Martinez",
-    email: "bob.martinez@example.com",
+    full_name: "George Williams",
+    email: "george.williams+reviewer@example.com",
     role: "reviewer",
     avatar_url: "",
     created_at: "2025-01-15T08:00:00Z",
@@ -220,8 +220,8 @@ export const MOCK_USERS: Record<UserRole, User> = {
   manager: {
     id: "usr_003",
     org_id: "org_001",
-    full_name: "Carol Williams",
-    email: "carol.williams@example.com",
+    full_name: "George Williams",
+    email: "george.williams+manager@example.com",
     role: "manager",
     avatar_url: "",
     created_at: "2025-01-15T08:00:00Z",
