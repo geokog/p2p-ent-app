@@ -22,12 +22,17 @@ export async function GET(request: Request) {
   const limit = Number.isFinite(raw)
     ? Math.min(MAX_LIMIT, Math.max(1, raw))
     : DEFAULT_LIMIT;
+  const automationRowId = searchParams.get("kognitos_automation_id")?.trim();
 
-  const { data: rows, error } = await supabaseAdmin
+  let historyQuery = supabaseAdmin
     .from("kognitos_automation_sync_history")
     .select(
       "id, synced_at, new_runs_inserted, runs_fetched_from_api, runs_skipped_duplicates, sync_mode, kognitos_automation_id",
-    )
+    );
+  if (automationRowId) {
+    historyQuery = historyQuery.eq("kognitos_automation_id", automationRowId);
+  }
+  const { data: rows, error } = await historyQuery
     .order("synced_at", { ascending: false })
     .limit(limit);
 

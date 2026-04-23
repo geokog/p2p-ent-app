@@ -8,6 +8,7 @@ import {
   Users,
   Save,
   ChevronRight,
+  ChevronDown,
   Plus,
   RefreshCw,
 } from "lucide-react";
@@ -82,17 +83,20 @@ export default function SettingsPage() {
   const [timezone, setTimezone] = useState("America/New_York");
   const [saved, setSaved] = useState(false);
   const [automations, setAutomations] = useState<AutomationRow[]>([]);
-  const [syncHistory, setSyncHistory] = useState<SyncHistoryEntry[]>([]);
+  /** Per automation row UUID (`kognitos_automations.id`): undefined = not fetched yet */
+  const [syncHistoryByAutomationId, setSyncHistoryByAutomationId] = useState<
+    Record<string, SyncHistoryEntry[] | undefined>
+  >({});
+  const [expandedSyncAutomationId, setExpandedSyncAutomationId] = useState<
+    string | null
+  >(null);
   const [loadingKognitosSettings, setLoadingKognitosSettings] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
 
   const loadKognitosSettings = useCallback(async () => {
     setLoadingKognitosSettings(true);
     try {
-      const [autosRes, histRes] = await Promise.all([
-        fetch("/api/kognitos/automations"),
-        fetch("/api/kognitos/automations/sync-history?limit=10"),
-      ]);
+      const autosRes = await fetch("/api/kognitos/automations");
       const autosJson = (await autosRes.json()) as {
         automations?: AutomationRow[];
       };
@@ -118,19 +122,47 @@ export default function SettingsPage() {
       } else {
         setAutomations([]);
       }
-
-      const histJson = (await histRes.json()) as {
-        entries?: SyncHistoryEntry[];
-      };
-      if (histRes.ok) {
-        setSyncHistory(histJson.entries ?? []);
-      } else {
-        setSyncHistory([]);
-      }
+      setSyncHistoryByAutomationId({});
     } finally {
       setLoadingKognitosSettings(false);
     }
   }, []);
+
+  const fetchSyncHistoryForAutomation = useCallback(
+    async (kognitosAutomationRowId: string) => {
+      const params = new URLSearchParams({
+        limit: "10",
+        kognitos_automation_id: kognitosAutomationRowId,
+      });
+      const res = await fetch(
+        `/api/kognitos/automations/sync-history?${params.toString()}`,
+      );
+      const json = (await res.json()) as { entries?: SyncHistoryEntry[] };
+      const entries = res.ok ? (json.entries ?? []) : [];
+      setSyncHistoryByAutomationId((prev) => ({
+        ...prev,
+        [kognitosAutomationRowId]: entries,
+      }));
+    },
+    [],
+  );
+
+  function toggleSyncHistoryRow(kognitosAutomationRowId: string) {
+    setExpandedSyncAutomationId((prev) =>
+      prev === kognitosAutomationRowId ? null : kognitosAutomationRowId,
+    );
+  }
+
+  useEffect(() => {
+    const id = expandedSyncAutomationId;
+    if (!id) return;
+    if (syncHistoryByAutomationId[id] !== undefined) return;
+    void fetchSyncHistoryForAutomation(id);
+  }, [
+    expandedSyncAutomationId,
+    syncHistoryByAutomationId,
+    fetchSyncHistoryForAutomation,
+  ]);
 
   useEffect(() => {
     void loadKognitosSettings();
@@ -265,81 +297,130 @@ export default function SettingsPage() {
             Run sync status
           </CardTitle>
           <CardDescription>
-            Last 10 Kognitos list-runs sync passes (top bar refresh). Each row is
-            one automation after the API returned; new automations appear here
-            after their first sync.
+            Per automation: when the app last listed runs from Kognitos and updated
+            Supabase (same action as the top bar sync), and how many new runs were
+            inserted in that pass. Expand a row to see up to the last 10 sync passes
+            for that automation.
           </CardDescription>
         </CardHeader>
         <CardContent>
           {loadingKognitosSettings ? (
             <p className="text-sm text-muted-foreground">Loading…</p>
-          ) : syncHistory.length === 0 ? (
+          ) : automations.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No sync history yet. Register an automation above, then use the top
-              bar refresh to pull runs from Kognitos.
+              No automations registered. Register an automation above, then use the
+              top bar refresh to pull runs from Kognitos.
             </p>
           ) : (
-            <div className="overflow-x-auto rounded-md border border-border">
-              <Table>
-                <TableHeader>
-                  <TableRow className="hover:bg-transparent">
-                    <TableHead className="min-w-[140px] whitespace-normal">
-                      Automation
-                    </TableHead>
-                    <TableHead className="min-w-[11rem] whitespace-normal">
-                      Synced at
-                    </TableHead>
-                    <TableHead className="whitespace-normal">Mode</TableHead>
-                    <TableHead className="text-right tabular-nums whitespace-normal">
-                      Fetched
-                    </TableHead>
-                    <TableHead className="text-right tabular-nums whitespace-normal">
-                      Skipped
-                    </TableHead>
-                    <TableHead className="text-right tabular-nums whitespace-normal">
-                      New runs
-                    </TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {syncHistory.map((row) => {
-                    const name =
-                      row.automation_display_name?.trim() ||
-                      row.automation_short_id ||
-                      row.kognitos_automation_id.slice(0, 8);
-                    return (
-                      <TableRow key={row.id}>
-                        <TableCell className="max-w-[220px] align-top font-medium">
-                          <span className="line-clamp-2" title={name}>
-                            {name}
-                          </span>
-                          {row.automation_short_id &&
-                          row.automation_display_name?.trim() ? (
-                            <p className="mt-0.5 truncate text-xs font-normal text-muted-foreground tabular-nums">
-                              {row.automation_short_id}
-                            </p>
-                          ) : null}
-                        </TableCell>
-                        <TableCell className="align-top tabular-nums text-muted-foreground">
-                          {formatSyncedAt(row.synced_at)}
-                        </TableCell>
-                        <TableCell className="align-top text-muted-foreground">
-                          {formatSyncMode(row.sync_mode)}
-                        </TableCell>
-                        <TableCell className="align-top text-right tabular-nums">
-                          {row.runs_fetched_from_api}
-                        </TableCell>
-                        <TableCell className="align-top text-right tabular-nums text-muted-foreground">
-                          {row.runs_skipped_duplicates}
-                        </TableCell>
-                        <TableCell className="align-top text-right tabular-nums font-medium text-foreground">
-                          {row.new_runs_inserted}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
+            <div className="divide-y rounded-md border border-border">
+              {automations.map((a) => {
+                const title = a.display_name?.trim() || a.automation_id;
+                const expanded = expandedSyncAutomationId === a.id;
+                const history = syncHistoryByAutomationId[a.id];
+
+                return (
+                  <div key={a.id} className="bg-card">
+                    <div className="flex flex-col gap-3 p-4 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between sm:gap-4">
+                      <button
+                        type="button"
+                        onClick={() => toggleSyncHistoryRow(a.id)}
+                        className="flex min-w-0 max-w-full items-start gap-2 rounded-sm text-left text-sm font-semibold text-foreground outline-none ring-offset-background hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+                        aria-expanded={expanded}
+                      >
+                        <span className="mt-0.5 shrink-0 text-muted-foreground">
+                          {expanded ? (
+                            <ChevronDown className="h-4 w-4" aria-hidden />
+                          ) : (
+                            <ChevronRight className="h-4 w-4" aria-hidden />
+                          )}
+                        </span>
+                        <span className="min-w-0 break-words">{title}</span>
+                      </button>
+                      <dl className="grid shrink-0 grid-cols-1 gap-3 text-sm sm:grid-cols-2 sm:gap-8">
+                        <div>
+                          <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                            Last sync
+                          </dt>
+                          <dd className="mt-0.5 tabular-nums text-muted-foreground">
+                            {a.last_runs_sync_at
+                              ? formatSyncedAt(a.last_runs_sync_at)
+                              : "—"}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                            New runs inserted (last sync)
+                          </dt>
+                          <dd className="mt-0.5 tabular-nums text-muted-foreground">
+                            {a.last_runs_sync_at != null
+                              ? a.last_sync_new_runs_inserted
+                              : "—"}
+                          </dd>
+                        </div>
+                      </dl>
+                    </div>
+                    {expanded ? (
+                      <div className="border-t border-border bg-muted/30 px-2 py-3 sm:px-4">
+                        {history === undefined ? (
+                          <p className="px-2 text-sm text-muted-foreground">
+                            Loading sync history…
+                          </p>
+                        ) : history.length === 0 ? (
+                          <p className="px-2 text-sm text-muted-foreground">
+                            No sync history recorded for this automation yet. Use
+                            the top bar refresh after runs exist in Kognitos.
+                          </p>
+                        ) : (
+                          <div className="overflow-x-auto rounded-md border border-border bg-background">
+                            <Table>
+                              <TableHeader>
+                                <TableRow className="hover:bg-transparent">
+                                  <TableHead className="min-w-[11rem] whitespace-normal">
+                                    Synced at
+                                  </TableHead>
+                                  <TableHead className="whitespace-normal">
+                                    Mode
+                                  </TableHead>
+                                  <TableHead className="text-right tabular-nums whitespace-normal">
+                                    Fetched
+                                  </TableHead>
+                                  <TableHead className="text-right tabular-nums whitespace-normal">
+                                    Skipped
+                                  </TableHead>
+                                  <TableHead className="text-right tabular-nums whitespace-normal">
+                                    New runs
+                                  </TableHead>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {history.map((row) => (
+                                  <TableRow key={row.id}>
+                                    <TableCell className="align-top tabular-nums text-muted-foreground">
+                                      {formatSyncedAt(row.synced_at)}
+                                    </TableCell>
+                                    <TableCell className="align-top text-muted-foreground">
+                                      {formatSyncMode(row.sync_mode)}
+                                    </TableCell>
+                                    <TableCell className="align-top text-right tabular-nums">
+                                      {row.runs_fetched_from_api}
+                                    </TableCell>
+                                    <TableCell className="align-top text-right tabular-nums text-muted-foreground">
+                                      {row.runs_skipped_duplicates}
+                                    </TableCell>
+                                    <TableCell className="align-top text-right tabular-nums font-medium text-foreground">
+                                      {row.new_runs_inserted}
+                                    </TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          </div>
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
             </div>
           )}
         </CardContent>
