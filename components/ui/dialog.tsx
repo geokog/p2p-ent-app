@@ -84,10 +84,22 @@ function DialogContent({
           )}
           {...props}
         >
+          {/*
+            Fullscreen Content is still "inside" the dialog for Radix, so outside-dismiss
+            does not run for empty padding. Invisible close layer behind the card receives
+            clicks outside the preview panel (same pattern as overlay click-to-close).
+          */}
+          <DialogPrimitive.Close
+            type="button"
+            aria-label="Close dialog"
+            className="pointer-events-auto absolute inset-0 z-0 m-0 cursor-default appearance-none border-0 bg-transparent p-0 shadow-none outline-none ring-0 hover:bg-transparent focus-visible:ring-0"
+          >
+            <span className="sr-only">Close</span>
+          </DialogPrimitive.Close>
           <div
             data-slot="dialog-content-inner"
             className={cn(
-              "pointer-events-auto relative flex w-full max-w-[calc(100%-2rem)] flex-col gap-4 overflow-hidden rounded-lg border bg-background p-6 shadow-lg outline-none sm:max-w-lg",
+              "pointer-events-auto relative z-10 flex w-full max-w-[calc(100%-2rem)] flex-col gap-4 overflow-hidden rounded-lg border bg-background p-6 shadow-lg outline-none sm:max-w-lg",
               "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 duration-200",
               className,
             )}

@@ -215,6 +215,7 @@ function SortableHead({
   sortDir,
   onSort,
   align = "left",
+  className,
 }: {
   label: string;
   colKey: DashboardRunSortKey;
@@ -222,6 +223,8 @@ function SortableHead({
   sortDir: "asc" | "desc" | undefined;
   onSort?: (key: DashboardRunSortKey) => void;
   align?: "left" | "right";
+  /** Merged into `TableHead` (e.g. column width for `table-fixed`). */
+  className?: string;
 }) {
   const active = sortKey === colKey;
   const Icon =
@@ -237,7 +240,7 @@ function SortableHead({
   if (!onSort) {
     return (
       <TableHead
-        className={cn(headLabel, align === "right" && "text-right")}
+        className={cn(headLabel, align === "right" && "text-right", className)}
       >
         {label}
       </TableHead>
@@ -245,7 +248,9 @@ function SortableHead({
   }
 
   return (
-    <TableHead className={cn(headLabel, align === "right" && "text-right")}>
+    <TableHead
+      className={cn(headLabel, align === "right" && "text-right", className)}
+    >
       <button
         type="button"
         onClick={() => onSort(colKey)}
@@ -452,7 +457,7 @@ export function KognitosRunsAnalyzedTable({
                     embedded ? "mx-6" : "mx-4",
                   )}
                 >
-                  <Table>
+                  <Table className="table-fixed">
                     <TableHeader>
                       <TableRow className="border-b border-border hover:bg-transparent">
                         <SortableHead
@@ -461,6 +466,7 @@ export function KognitosRunsAnalyzedTable({
                           sortKey={sortKey}
                           sortDir={sortDir}
                           onSort={onSortColumn}
+                          className="min-w-0 max-w-[min(280px,40vw)] w-[30%]"
                         />
                         <SortableHead
                           label="Invoice / ID"
@@ -468,6 +474,7 @@ export function KognitosRunsAnalyzedTable({
                           sortKey={sortKey}
                           sortDir={sortDir}
                           onSort={onSortColumn}
+                          className="min-w-[7.5rem] w-[11rem] max-w-[min(14rem,26vw)]"
                         />
                         <SortableHead
                           label="Value"
@@ -527,35 +534,52 @@ export function KognitosRunsAnalyzedTable({
                               key={row.id}
                               className="border-b border-border/70 last:border-0 hover:bg-muted/20"
                             >
-                              <TableCell className={cn("max-w-[240px]", cellPrimary)}>
-                                <div className="flex items-start gap-2.5">
+                              <TableCell
+                                className={cn(
+                                  "min-w-0 max-w-[min(280px,40vw)] overflow-hidden",
+                                  cellPrimary,
+                                )}
+                              >
+                                <div className="flex min-w-0 items-start gap-2.5">
                                   <span
                                     className="flex size-8 shrink-0 items-center justify-center rounded-full bg-emerald-100/90 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-400"
                                     aria-hidden
                                   >
                                     <RefreshCw className="size-3.5" />
                                   </span>
-                                  <div className="min-w-0 pt-0.5">
+                                  <div className="min-w-0 flex-1 overflow-hidden pt-0.5">
                                     {vendorHref ? (
                                       <Link
                                         href={vendorHref}
+                                        title={row.vendor}
                                         className={cn(
-                                          "text-foreground underline-offset-4 hover:underline",
+                                          "block truncate text-foreground underline-offset-4 hover:underline",
                                           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm",
                                         )}
                                       >
                                         {row.vendor}
                                       </Link>
                                     ) : (
-                                      row.vendor
+                                      <span
+                                        className="block truncate"
+                                        title={row.vendor}
+                                      >
+                                        {row.vendor}
+                                      </span>
                                     )}
                                   </div>
                                 </div>
                               </TableCell>
-                              <TableCell className={cellTabular}>
+                              <TableCell
+                                className={cn(
+                                  "min-w-[7.5rem] max-w-[min(14rem,26vw)] overflow-hidden",
+                                  cellTabular,
+                                )}
+                              >
                                 {row.invoicePdfUrl ? (
                                   <button
                                     type="button"
+                                    title={row.invoiceNumber}
                                     onClick={() => {
                                       const pdfUrl = row.invoicePdfUrl;
                                       if (!pdfUrl) return;
@@ -565,7 +589,7 @@ export function KognitosRunsAnalyzedTable({
                                       });
                                     }}
                                     className={cn(
-                                      "text-left text-foreground underline-offset-4 hover:underline",
+                                      "block w-full truncate text-left text-foreground underline-offset-4 hover:underline",
                                       "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm",
                                     )}
                                     aria-label="Open supplier invoice PDF"
@@ -573,7 +597,12 @@ export function KognitosRunsAnalyzedTable({
                                     {row.invoiceNumber}
                                   </button>
                                 ) : (
-                                  row.invoiceNumber
+                                  <span
+                                    className="block truncate"
+                                    title={row.invoiceNumber}
+                                  >
+                                    {row.invoiceNumber}
+                                  </span>
                                 )}
                               </TableCell>
                               <TableCell
@@ -631,7 +660,7 @@ export function KognitosRunsAnalyzedTable({
                                     />
                                     {format(
                                       new Date(row.completedAt),
-                                      "MMM d, yyyy, h:mm a",
+                                      "MMM d, yyyy",
                                     )}
                                   </span>
                                 ) : (
