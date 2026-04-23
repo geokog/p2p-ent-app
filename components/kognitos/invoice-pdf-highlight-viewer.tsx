@@ -13,6 +13,8 @@ import {
   Download,
   Layers2,
   Maximize2,
+  PanelLeft,
+  PanelLeftClose,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
@@ -439,6 +441,7 @@ export function InvoicePdfHighlightViewer({ pdfUrl, runId }: Props) {
   const [fitMaxCssWidth, setFitMaxCssWidth] = useState(640);
   const [zoomLevel, setZoomLevel] = useState(1);
   const [activePage, setActivePage] = useState(1);
+  const [thumbRailExpanded, setThumbRailExpanded] = useState(true);
   const [parsedHighlights, setParsedHighlights] = useState<IdPdfFieldHighlight[]>([]);
   const [payloadError, setPayloadError] = useState<string | null>(null);
   const [pdfDoc, setPdfDoc] = useState<PDFDocumentProxy | null>(null);
@@ -590,18 +593,53 @@ export function InvoicePdfHighlightViewer({ pdfUrl, runId }: Props) {
         {pdfDoc && !pdfError ? (
           <div className="flex min-h-0 flex-1 flex-row">
             <aside
-              className="flex w-[76px] shrink-0 flex-col items-center overflow-y-auto border-r border-white/[0.06] bg-[#1c1c1e] py-3 pl-1.5 pr-1"
+              className={cn(
+                "flex shrink-0 flex-col border-r border-white/[0.06] bg-[#1c1c1e] text-zinc-200 transition-[width] duration-200 ease-out",
+                thumbRailExpanded ? "w-[76px]" : "w-10 overflow-hidden",
+              )}
               aria-label="Page thumbnails"
             >
-              {Array.from({ length: pdfDoc.numPages }, (_, i) => i + 1).map((pageNum) => (
-                <PdfPageThumbnail
-                  key={pageNum}
-                  pdf={pdfDoc}
-                  pageNumber1={pageNum}
-                  selected={pageNum === activePage}
-                  onSelect={() => setActivePage(pageNum)}
-                />
-              ))}
+              <div className="flex w-full shrink-0 justify-center border-b border-white/[0.06] px-1 py-2">
+                <Tooltip delayDuration={300}>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      className="size-9 shrink-0 rounded-md border border-white/15 bg-white/[0.07] text-zinc-100 shadow-sm hover:border-white/25 hover:bg-white/15 hover:text-white"
+                      onClick={() => setThumbRailExpanded((v) => !v)}
+                      aria-expanded={thumbRailExpanded}
+                      aria-label={
+                        thumbRailExpanded
+                          ? "Collapse page thumbnails"
+                          : "Expand page thumbnails"
+                      }
+                    >
+                      {thumbRailExpanded ? (
+                        <PanelLeftClose className="size-5" strokeWidth={2} aria-hidden />
+                      ) : (
+                        <PanelLeft className="size-5" strokeWidth={2} aria-hidden />
+                      )}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="right">
+                    {thumbRailExpanded ? "Collapse thumbnails" : "Show thumbnails"}
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+              {thumbRailExpanded ? (
+                <div className="flex flex-1 flex-col items-center overflow-y-auto py-2 pl-1.5 pr-1">
+                  {Array.from({ length: pdfDoc.numPages }, (_, i) => i + 1).map((pageNum) => (
+                    <PdfPageThumbnail
+                      key={pageNum}
+                      pdf={pdfDoc}
+                      pageNumber1={pageNum}
+                      selected={pageNum === activePage}
+                      onSelect={() => setActivePage(pageNum)}
+                    />
+                  ))}
+                </div>
+              ) : null}
             </aside>
             <div
               ref={workspaceRef}
