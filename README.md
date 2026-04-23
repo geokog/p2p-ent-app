@@ -201,6 +201,185 @@ Dashboard KPIs, **Runs analyzed**, **Expert Queue**, validation columns (DOC / Q
 
 **IDP invoice PDF field highlights (bounding boxes):** the Expert Queue invoice dialog loads that same raw `payload` and parses IDP `extracted_field` rows for overlays. Full path notes, numeric decoding, and a reuse checklist live in [`docs/idp-invoice-pdf-highlights.md`](docs/idp-invoice-pdf-highlights.md).
 
+### Bounding box field details: where they live, how to unwrap them, and how to render them
+
+This section is for engineers implementing (or extending) **extracted fields**, **bounding boxes**, **coordinates**, **confidence**, and **page** alignment in the document preview. It is grounded only in what this repository implements today.
+
+**Canonical JSON path (matches [`lib/kognitos/idp-invoice-field-highlights.ts`](lib/kognitos/idp-invoice-field-highlights.ts) and [`docs/idp-invoice-pdf-highlights.md`](docs/idp-invoice-pdf-highlights.md)):**
+
+1. Start from the **run document** stored in `kognitos_runs.payload` (same object returned as `payload` from `GET /api/kognitos/runs/[id]/payload`).
+2. **`getOutputs`:** `payload.state.completed.outputs` — if `state`, `completed`, or `outputs` is missing, IDP parsing returns `[]` (no fallback to top-level `outputs` or `user_inputs` / `userInputs` in this module).
+3. **`getIdpRoot`:** under that `outputs` object, the IDP node is `outputs.idp_extraction_results` **or** `outputs.idpExtractionResults`.
+4. **IDP struct entries:** `(idpNode.dictionary.entries || idpNode.entries)` as the protobuf-style map rows `{ key, value }`.
+5. **`fields` list:** `protoMapGet(topEntries, "fields")` → `fieldsValue`; the parser sets `items` to **`fieldsValue.list?.items ?? fieldsValue.items`** only (see `parseIdpInvoiceFieldHighlights` in the same file). If real payloads nest list items under an extra `value` wrapper, the parser does not unwrap that today—extend the module and update [`docs/idp-invoice-pdf-highlights.md`](docs/idp-invoice-pdf-highlights.md) accordingly.
+6. **Each list item:** `item.dictionary.entries` → `entryListToValueMap`; keep rows where `element_type` or `elementType` (text, case-insensitive) is **`extracted_field`**. Per-field keys read in `parseOneFieldItemWithTrace`: `name` (via `readNameFromMappedValue`), `values` (first list item text), `page_number` / `pageNumber`, `confidence`, `bounding_box` / `boundingBox` (inner `dictionary.entries` for `x`, `y`, `width`, `height`).
+
+**Separate path (document label only, not bboxes):** `extractInvoiceDocumentFileLabel` reads `payload.userInputs` / `payload.user_inputs` → `.invoice.file.remote` for a display filename default.
+
+#### Source of truth: database vs denormalized tables
+
+| Store | Role for bounding boxes |
+|-------|---------------------------|
+| **`kognitos_runs.payload`** (`jsonb`) | **Canonical.** Full ListRuns/GetRun-shaped JSON. IDP extraction results, per-field **bounding boxes**, **confidence**, **page**, and **values** live inside this blob under `state.completed.outputs` (see below). |
+| **`kognitos_run_inputs`** | **Not** the source for bbox geometry. Rows denormalize **file-shaped inputs** (keys, `kognitos_file_id`, filenames, `remote_raw`) for joins and filters—see [`supabase/migrations/00000000000004_kognitos_runs.sql`](supabase/migrations/00000000000004_kognitos_runs.sql). |
+
+There is **no** separate Postgres column for “highlights”; everything is read from **`payload`**.
+
+#### How the app retrieves the payload for a run
+
+- **Browser / Next client:** `GET /api/kognitos/runs/{id}/payload` → JSON body `{ payload: <object> }`. Implemented in [`app/api/kognitos/runs/[id]/payload/route.ts`](app/api/kognitos/runs/[id]/payload/route.ts). The handler `select("payload").eq("id", id)` from `kognitos_runs` and returns the row unchanged (no reshaping of IDP).
+- **Invoice PDF bytes (same run row):** `GET /api/kognitos/runs/{id}/invoice-pdf` in [`app/api/kognitos/runs/[id]/invoice-pdf/route.ts`](app/api/kognitos/runs/[id]/invoice-pdf/route.ts)—also reads `kognitos_runs.payload` to resolve which file to download.
+- **Trimmed run DTO (not for bboxes):** `GET /api/kognitos/runs/[id]` maps through [`lib/kognitos/map-run.ts`](lib/kognitos/map-run.ts) to `KognitosRun`. That path is **not** where IDP field lists or bounding boxes are exposed; use the **`/payload`** route for automation output mining.
+
+**Staleness:** [`scripts/refresh-kognitos-run-payloads.ts`](scripts/refresh-kognitos-run-payloads.ts) (`npm run refresh:run-payloads`) re-fetches GET Run for each stored id via [`lib/kognitos/refresh-run-payloads.ts`](lib/kognitos/refresh-run-payloads.ts) and updates `kognitos_runs.payload` plus `kognitos_run_inputs`.
+
+#### Step-by-step: locate bounding box data from a run id
+
+1. **Resolve the run id**  
+   Use the short run id stored in `kognitos_runs.id` (same segment as in API paths—see [How to retrieve outputs](#automation-run-outputs-retrieve-for-insights)).
+
+2. **Query Postgres**  
+   ```sql
+   SELECT id, payload
+   FROM kognitos_runs
+   WHERE id = 'YOUR_RUN_SHORT_ID';
+   ```  
+   Inspect `payload` in the Supabase SQL editor or export JSON.
+
+3. **Navigate inside `payload` (IDP path used by this repo)**  
+   The parser [`parseIdpInvoiceFieldHighlights`](lib/kognitos/idp-invoice-field-highlights.ts) expects the **root** argument to be the **run object** (what is stored in `payload`), not wrapped in an extra `{ payload: … }` layer.
+
+   - **`user_inputs` / `userInputs`:** Used in this repo for **invoice file label** metadata (`extractInvoiceDocumentFileLabel` walks `userInputs` / `user_inputs` → `invoice` → `file` → `remote`). **Bounding boxes for IDP extracted fields are not read from here.**
+   - **Top-level `outputs`:** Other dashboard code merges top-level vs completed outputs for payment text and validation (see [`lib/kognitos/normalize-dashboard-run.ts`](lib/kognitos/normalize-dashboard-run.ts)). **The IDP highlight parser does not use that merge**; it uses **`state.completed.outputs` only** via `getOutputs` in [`lib/kognitos/idp-invoice-field-highlights.ts`](lib/kognitos/idp-invoice-field-highlights.ts).
+   - **`state.completed.outputs`:** **Branch used for IDP.** `getOutputs` returns `payload.state.completed.outputs` or `null` if missing.
+
+4. **IDP root under `outputs`**  
+   From `outputs`, the IDP node is **`idp_extraction_results`** or **`idpExtractionResults`** (`getIdpRoot` in the same file).
+
+5. **`fields` list and `extracted_field` rows**  
+   Under the IDP root, entries are protobuf-style maps (`dictionary.entries` or `entries`). The **`fields`** entry’s value is a **list** of items (`list.items` or `items`). Each item is again a map; only rows whose **`element_type` / `elementType`** text equals **`extracted_field`** (case-insensitive) are turned into highlights. Detailed column-style documentation: [`docs/idp-invoice-pdf-highlights.md`](docs/idp-invoice-pdf-highlights.md).
+
+6. **Per-field representation (after parsing)**  
+   Successful rows become [`IdPdfFieldHighlight`](lib/kognitos/idp-invoice-field-highlights.ts):
+
+   - **Field name:** `label` (from the `name` entry; blocklisted names are skipped—see `shouldSkipFieldName` / `NAME_BLOCKLIST` in that file).
+   - **Field value:** `value` (from `values`, first list item text when present).
+   - **Page:** `pageNumber` (1-based integer from `page_number` / `pageNumber`; invalid or missing page causes the row to be skipped).
+   - **Confidence:** `confidence` (`number | null` from `confidence`; may be absent).
+   - **Bounding box / coordinates:** `bbox` `{ x, y, width, height }` from `bounding_box` / `boundingBox` inner `dictionary.entries`; decoded with `readNumberFromValueMapEntry` (supports protobuf wrappers and C# `Decimal`-style `{ lo, hi, mid?, flags? }`).
+   - **Coordinate mode:** `bboxCoordMode` — `"normalized"` vs `"pdf_points"` from `inferBboxOverlayCoordMode` (same file).
+
+   Rows without a valid bbox or with wrong `element_type` produce **`highlight: null`** but still contribute to optional parse traces when `IDP_HIGHLIGHT_FIELD_DEBUG=1`.
+
+**Verification if your payload differs:** If your automation stores IDP under different keys, [`getOutputs`](lib/kognitos/idp-invoice-field-highlights.ts) / [`getIdpRoot`](lib/kognitos/idp-invoice-field-highlights.ts) (and list resolution for `fields`) must be extended; [`getIdpHighlightPayloadDiagnostics`](lib/kognitos/idp-invoice-field-highlights.ts) plus server logs in the payload route help confirm whether the expected branches match real JSON.
+
+### How to unwrap the payload
+
+1. **Fetch** `{ payload }` from `GET /api/kognitos/runs/{id}/payload` (or read `kognitos_runs.payload` in SQL).
+2. **Assert shape:** `payload` must be a plain object (`typeof payload === "object"` and not an array)—same guard as [`components/kognitos/invoice-pdf-highlight-viewer.tsx`](components/kognitos/invoice-pdf-highlight-viewer.tsx).
+3. **Parse:** call **`parseIdpInvoiceFieldHighlights(payload as Record<string, unknown>)`** → `IdPdfFieldHighlight[]`. Do not reimplement bbox decoding unless you have a new contract; the module already handles **`unwrapProtoValueLayers`**, nested **`value`** wrappers, **`readTextFromValueMapEntry`**, **`readNumberFromValueMapEntry`**, and **`decodeCSharpDecimalLoMidHiFlags`**.
+4. **Optional diagnostics:** **`getIdpHighlightPayloadDiagnostics(payload)`** returns counts (`hasIdpExtractionResults`, `fieldsListItemsLength`, `extractedFieldItemsCount`, `normalizedHighlightsCount`) without requiring every field to parse cleanly—used in the payload GET route for logging.
+
+**Normalizing for UI:** the repo’s canonical UI type for one highlight is **`IdPdfFieldHighlight`**. A thin adapter is only needed if your view model differs—for example:
+
+```ts
+import type { IdPdfFieldHighlight } from "@/lib/kognitos/idp-invoice-field-highlights";
+
+export type ExtractedFieldRow = {
+  id: string;
+  fieldName: string;
+  fieldValue: string;
+  confidence: number | null;
+  page: number;
+  bbox: IdPdfFieldHighlight["bbox"];
+  bboxCoordMode: IdPdfFieldHighlight["bboxCoordMode"];
+};
+
+export function toExtractedFieldRow(h: IdPdfFieldHighlight): ExtractedFieldRow {
+  return {
+    id: h.id,
+    fieldName: h.label,
+    fieldValue: h.value,
+    confidence: h.confidence,
+    page: h.pageNumber,
+    bbox: h.bbox,
+    bboxCoordMode: h.bboxCoordMode,
+  };
+}
+```
+
+**Missing or malformed data (parser behavior):**
+
+- **Missing confidence:** stored as `null`; UI can use [`formatConfidenceForTooltip`](lib/kognitos/idp-invoice-field-highlights.ts) for display rules.
+- **Missing / invalid bbox or page:** row is omitted from the array (`parseOneFieldItemWithTrace` sets `skipReason`).
+- **Not every list item is an extracted field:** only `element_type === "extracted_field"` rows become highlights.
+
+**Avoid brittle coupling:** depend on **`parseIdpInvoiceFieldHighlights`** and **`IdPdfFieldHighlight`** rather than hard-coding deep JSON paths in UI code; when Kognitos changes shape, update the **single parser module** and diagnostics.
+
+### How to implement the UI correctly
+
+1. **Fetch raw payload**  
+   Client: `fetch(\`/api/kognitos/runs/${encodeURIComponent(runId)}/payload\`)`, then `const { payload, error } = await res.json()` and validate `payload` is an object (see [`InvoicePdfHighlightViewer`](components/kognitos/invoice-pdf-highlight-viewer.tsx)).
+
+2. **Transform for overlays**  
+   `const highlights = parseIdpInvoiceFieldHighlights(payload as Record<string, unknown>)`. Pass **`maxCssWidth` / zoom** and **`pageHighlights`** filtered by active page into the PDF page component pattern in [`components/kognitos/invoice-pdf-highlight-viewer.tsx`](components/kognitos/invoice-pdf-highlight-viewer.tsx) (`PdfPageWithHighlights`, `HighlightOverlay`, shared `layoutForZoom` / `bboxCoordMode`).
+
+3. **Right-hand extracted fields panel**  
+   Reuse or mirror **`ExtractedFieldsReviewPanel`** in the same file: same **`IdPdfFieldHighlight[]`** drives rows; **`linkedHoverFieldId` / `focusedFieldId`** and pointer handlers keep **rows** and **bounding boxes** in sync.
+
+4. **Missing data in UI**  
+   Empty parse result → show an empty state (viewer shows a short message when `parsedHighlights.length === 0`). Rows with null confidence still render; bbox-only interaction applies only to highlights that exist.
+
+5. **Debugging**  
+   - Server: set **`IDP_HIGHLIGHT_FIELD_DEBUG=1`** for `[idp-field-parse]` traces (see [`docs/idp-invoice-pdf-highlights.md`](docs/idp-invoice-pdf-highlights.md)).  
+   - Client bbox decode logs: **`NEXT_PUBLIC_IDP_BBOX_LOG=1`** is read in [`lib/kognitos/idp-invoice-field-highlights.ts`](lib/kognitos/idp-invoice-field-highlights.ts) (`idpBboxLogEnabled`); **verify** your Next bundle exposes this env to the client if you rely on it in the browser.  
+   - Payload GET always logs a one-line summary in [`app/api/kognitos/runs/[id]/payload/route.ts`](app/api/kognitos/runs/[id]/payload/route.ts).
+
+**Generic protobuf walking elsewhere:** [`lib/kognitos/idp-protobuf-extracted.ts`](lib/kognitos/idp-protobuf-extracted.ts) walks subtrees for other extraction-style JSON; IDP PDF highlights use the **dedicated** `idp-invoice-field-highlights.ts` parser.
+
+### Implementation checklist
+
+- [ ] **Database:** confirm `kognitos_runs.id` and `SELECT payload FROM kognitos_runs WHERE id = ?`.
+- [ ] **Payload retrieval:** use **`GET /api/kognitos/runs/[id]/payload`** (or Supabase admin server-side) — not **`GET /api/kognitos/runs/[id]`** alone for full IDP trees.
+- [ ] **Extraction parsing:** `parseIdpInvoiceFieldHighlights` on the raw run object.
+- [ ] **Normalization:** map `IdPdfFieldHighlight` to your table row type if needed; keep **`id`** stable for row ↔ overlay linking.
+- [ ] **Overlay rendering:** reuse **`PdfPageWithHighlights`** / mask / bbox layering; respect **`bboxCoordMode`** and PDF.js viewport scale (see viewer source).
+- [ ] **Side panel:** bind list to the **same array** as overlays; hover/click ids must match **`IdPdfFieldHighlight.id`**.
+- [ ] **Empty states:** no IDP root, empty `fields`, or zero successful parses.
+- [ ] **Debugging:** diagnostics helper + env vars + payload route logs.
+- [ ] **Validation:** compare `getIdpHighlightPayloadDiagnostics` counts to `parseIdpInvoiceFieldHighlights(...).length` on real stored payloads.
+
+### Files to inspect
+
+| File | Why |
+|------|-----|
+| [`docs/idp-invoice-pdf-highlights.md`](docs/idp-invoice-pdf-highlights.md) | Path reference, protobuf map shapes, debug env vars. |
+| [`lib/kognitos/idp-invoice-field-highlights.ts`](lib/kognitos/idp-invoice-field-highlights.ts) | **`parseIdpInvoiceFieldHighlights`**, **`getIdpHighlightPayloadDiagnostics`**, **`IdPdfFieldHighlight`**, **`getOutputs`**, **`getIdpRoot`**, bbox decode, **`inferBboxOverlayCoordMode`**, **`formatConfidenceForTooltip`**, **`formatHighlightTooltip`**, **`entryListToValueMap`**. |
+| [`app/api/kognitos/runs/[id]/payload/route.ts`](app/api/kognitos/runs/[id]/payload/route.ts) | Raw payload HTTP surface + diagnostic logging. |
+| [`app/api/kognitos/runs/[id]/invoice-pdf/route.ts`](app/api/kognitos/runs/[id]/invoice-pdf/route.ts) | Same DB row; PDF download for the same run. |
+| [`components/kognitos/invoice-pdf-highlight-viewer.tsx`](components/kognitos/invoice-pdf-highlight-viewer.tsx) | End-to-end viewer: fetch payload, parse, PDF.js, overlays, right panel, zoom, toolbar. |
+| [`app/(dashboard)/expert-queue/page.tsx`](app/(dashboard)/expert-queue/page.tsx) | Document Processing dialog embedding the viewer. |
+| [`components/kognitos/kognitos-runs-analyzed-table.tsx`](components/kognitos/kognitos-runs-analyzed-table.tsx) | Same viewer in Runs analyzed flow. |
+| [`lib/kognitos/run-payload.ts`](lib/kognitos/run-payload.ts) | **`userInputs` / `user_inputs`** helpers (not bbox source; shows camel/snake pattern). |
+| [`lib/kognitos/map-run.ts`](lib/kognitos/map-run.ts) | API → `KognitosRun` mapping (**not** for raw IDP bbox mining). |
+| [`lib/kognitos/client-core.ts`](lib/kognitos/client-core.ts) | **`getRun`**, **`listRunsRaw`**, **`listAllRunsForAutomationRaw`** for live API JSON shapes. |
+| [`lib/kognitos/openapi.yaml`](lib/kognitos/openapi.yaml) | Contract reference for run / user_inputs shapes. |
+| [`scripts/refresh-kognitos-run-payloads.ts`](scripts/refresh-kognitos-run-payloads.ts) | CLI entry for refreshing stored payloads. |
+| [`lib/kognitos/refresh-run-payloads.ts`](lib/kognitos/refresh-run-payloads.ts) | Implementation used by the script. |
+| [`lib/kognitos/normalize-dashboard-run.ts`](lib/kognitos/normalize-dashboard-run.ts) | Merged **`outputs`** patterns for dashboard text (distinct from IDP bbox parser). |
+| [`lib/kognitos/markdown-report-supplier-invoice.ts`](lib/kognitos/markdown-report-supplier-invoice.ts) | Markdown report parsing (not bbox geometry). |
+| [`lib/kognitos/idp-protobuf-extracted.ts`](lib/kognitos/idp-protobuf-extracted.ts) | Generic subtree walking for other extraction JSON. |
+
+### Common mistakes to avoid
+
+- **Using `GET /api/kognitos/runs/[id]` (mapped `KognitosRun`) as the source for bounding boxes** — that response does not carry the full `state.completed.outputs` IDP field list; use **`/payload`** or SQL on **`kognitos_runs.payload`**.
+- **Assuming every `fields` list item has a bounding box** — the parser drops rows when **`parseBoundingBox`** fails or **`element_type`** is not **`extracted_field`**.
+- **Assuming coordinates are always normalized `[0,1]`** — the repo infers **`pdf_points`** vs **`normalized`** via **`inferBboxOverlayCoordMode`**; overlays must honor **`bboxCoordMode`** (see viewer).
+- **Ignoring page number** — highlights are **1-based** and filtered per page in the viewer; mismatching page breaks row ↔ bbox sync.
+- **Assuming confidence always exists** — type is **`number | null`**.
+- **Reading IDP from `user_inputs` or merged top-level `outputs` for this feature** — the implemented parser reads **`state.completed.outputs`** only (`getOutputs`).
+- **Parsing `dictionary.entries` incorrectly** — map keys must use **`entry.value`** keyed by key text, as documented in **`entryListToValueMap`** (see module comments and [`docs/idp-invoice-pdf-highlights.md`](docs/idp-invoice-pdf-highlights.md)).
+
 **Import runs from Kognitos:** use the **refresh icon** in the top bar (next to notifications). It calls `POST /api/kognitos/sync`, which loops **registered automations** in Supabase, paginates ListRuns per automation, inserts new rows with the correct automation link, and reindexes inputs (incremental per automation using the latest stored `create_time`). Requires Supabase service role + Kognitos base URL, token, org, and workspace (see above). Admins can register automations in onboarding or **Settings**.
 
 **Manual cleanup (Supabase only):** To remove synced data, use the SQL editor with a role that can delete from these tables. **Back up first.** Delete one automation by short id (same as in API paths / env):

@@ -8,13 +8,20 @@ import {
   useMemo,
   useRef,
   useState,
+  type RefObject,
 } from "react";
 import {
+  ArrowDownUp,
+  ChevronDown,
   Download,
+  Filter,
   Layers2,
   Maximize2,
-  PanelLeft,
-  PanelLeftClose,
+  PanelRight,
+  PanelRightClose,
+  Search,
+  Type,
+  X,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
@@ -22,16 +29,18 @@ import type { PDFDocumentProxy } from "pdfjs-dist";
 
 import { Button } from "@/components/ui/button";
 import {
-  formatHighlightTooltip,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import {
+  formatConfidenceForTooltip,
   parseIdpInvoiceFieldHighlights,
   type IdPdfFieldHighlight,
 } from "@/lib/kognitos/idp-invoice-field-highlights";
 import { cn } from "@/lib/utils";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 import {
   Tooltip,
   TooltipContent,
@@ -85,12 +94,21 @@ function HighlightOverlay({
   h,
   baseW,
   baseH,
+  isLinkedHover,
+  isFocused,
+  onLinkPointerEnter,
+  onLinkPointerLeave,
+  onLinkActivate,
 }: {
   h: IdPdfFieldHighlight;
   baseW: number;
   baseH: number;
+  isLinkedHover?: boolean;
+  isFocused?: boolean;
+  onLinkPointerEnter?: () => void;
+  onLinkPointerLeave?: () => void;
+  onLinkActivate?: () => void;
 }) {
-  const tip = formatHighlightTooltip(h);
   const norm = h.bboxCoordMode === "normalized";
   const boxStyle = norm
     ? ({
@@ -105,36 +123,35 @@ function HighlightOverlay({
         width: `${(h.bbox.width / baseW) * 100}%`,
         height: `${(h.bbox.height / baseH) * 100}%`,
       } as const);
-  const portalLayerClass =
-    "z-[100] max-w-sm whitespace-pre-wrap text-left text-xs font-mono leading-snug";
+  const ariaLabel =
+    h.value && h.value.trim()
+      ? `${h.label}, page ${h.pageNumber}: ${h.value}`
+      : `${h.label}, page ${h.pageNumber}`;
   return (
-    <Popover modal={false}>
-      <Tooltip delayDuration={200}>
-        <TooltipTrigger asChild>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              className={cn(
-                "absolute z-[21] box-border cursor-pointer border border-solid bg-transparent opacity-100 outline-none",
-                "rounded-[2px] border-[rgba(255,255,255,0.85)] transition-[border-color]",
-                "shadow-none [box-shadow:none]",
-                "pointer-events-auto",
-                "hover:border-[rgba(255,255,255,1)] hover:bg-transparent",
-                "focus-visible:border-[rgba(255,255,255,1)] focus-visible:ring-0 focus-visible:ring-offset-0",
-              )}
-              style={boxStyle}
-              aria-label={tip}
-            />
-          </PopoverTrigger>
-        </TooltipTrigger>
-        <TooltipContent side="top" className={portalLayerClass}>
-          {tip}
-        </TooltipContent>
-      </Tooltip>
-      <PopoverContent side="top" align="center" className={portalLayerClass}>
-        {tip}
-      </PopoverContent>
-    </Popover>
+    <button
+      type="button"
+      data-field-highlight-id={h.id}
+      className={cn(
+        "absolute box-border cursor-pointer border border-solid bg-transparent opacity-100 outline-none",
+        "rounded-[2px] transition-[border-color,box-shadow]",
+        "shadow-none [box-shadow:none]",
+        "pointer-events-auto",
+        "focus-visible:border-[rgba(255,255,255,1)] focus-visible:ring-0 focus-visible:ring-offset-0",
+        isFocused
+          ? "z-[23] border-amber-200 shadow-[0_0_0_2px_rgba(253,230,138,0.75)] hover:border-amber-100 hover:shadow-[0_0_0_2px_rgba(253,230,138,0.85)]"
+          : isLinkedHover
+            ? "z-[22] border-sky-300 shadow-[0_0_0_2px_rgba(56,189,248,0.55)] hover:!border-emerald-300 hover:!shadow-[0_0_0_2px_rgba(110,231,183,0.5)]"
+            : "z-[21] border-[rgba(255,255,255,0.85)] hover:!border-emerald-300 hover:!shadow-[0_0_0_2px_rgba(110,231,183,0.5)]",
+      )}
+      style={boxStyle}
+      aria-label={ariaLabel}
+      data-field-highlight-focused={isFocused ? "true" : undefined}
+      onPointerEnter={onLinkPointerEnter}
+      onPointerLeave={onLinkPointerLeave}
+      onClick={() => {
+        onLinkActivate?.();
+      }}
+    />
   );
 }
 
@@ -227,6 +244,11 @@ function PdfPageWithHighlights({
   pageHighlights,
   overlayEnabled,
   surface = "card",
+  linkedHoverFieldId,
+  focusedFieldId,
+  onHighlightLinkPointerEnter,
+  onHighlightLinkPointerLeave,
+  onHighlightLinkActivate,
 }: {
   pdf: PDFDocumentProxy;
   pageNumber1: number;
@@ -234,6 +256,11 @@ function PdfPageWithHighlights({
   pageHighlights: IdPdfFieldHighlight[];
   overlayEnabled: boolean;
   surface?: "card" | "workspace";
+  linkedHoverFieldId?: string | null;
+  focusedFieldId?: string | null;
+  onHighlightLinkPointerEnter?: (id: string) => void;
+  onHighlightLinkPointerLeave?: (id: string) => void;
+  onHighlightLinkActivate?: (id: string) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   /** PDF user-space page size at scale 1; zoom only changes derived cssW/cssH via layoutForZoom. */
@@ -283,8 +310,9 @@ function PdfPageWithHighlights({
         typeof window !== "undefined"
           ? Math.min(Math.max(window.devicePixelRatio || 1, 1), 3)
           : 1;
-      const cssW = vp.width;
-      const cssH = vp.height;
+      /** Match `layout` / overlay geometry exactly (vp can differ in float eps). */
+      const cssW = L.cssW;
+      const cssH = L.cssH;
       canvas.width = Math.max(1, Math.floor(cssW * dpr));
       canvas.height = Math.max(1, Math.floor(cssH * dpr));
       canvas.style.width = `${cssW}px`;
@@ -315,15 +343,16 @@ function PdfPageWithHighlights({
   return (
     <div
       className={cn(
-        "relative overflow-hidden bg-white",
+        "relative shrink-0 overflow-hidden bg-white",
         surface === "workspace"
           ? ""
           : "mx-auto mb-6 rounded border border-border shadow-sm",
       )}
-      style={{
-        width: layout?.cssW ?? Math.max(120, maxCssWidth),
-        minHeight: layout?.cssH ?? 200,
-      }}
+      style={
+        layout
+          ? { width: layout.cssW, height: layout.cssH }
+          : { width: Math.max(120, maxCssWidth), minHeight: 200 }
+      }
     >
       {!layout ? (
         <div
@@ -380,10 +409,18 @@ function PdfPageWithHighlights({
       <canvas
         ref={canvasRef}
         className={cn(
-          "relative z-0 block max-h-none w-auto",
+          "relative z-0 block max-h-none",
           surface === "workspace" ? "max-w-none" : "max-w-full",
         )}
-        style={{ verticalAlign: "top" }}
+        style={
+          layout
+            ? {
+                verticalAlign: "top",
+                width: layout.cssW,
+                height: layout.cssH,
+              }
+            : { verticalAlign: "top" }
+        }
       />
       {layout && overlayEnabled ? (
         <>
@@ -411,12 +448,320 @@ function PdfPageWithHighlights({
                 h={h}
                 baseW={layout.baseW}
                 baseH={layout.baseH}
+                isLinkedHover={linkedHoverFieldId === h.id}
+                isFocused={focusedFieldId === h.id}
+                onLinkPointerEnter={() => onHighlightLinkPointerEnter?.(h.id)}
+                onLinkPointerLeave={() => onHighlightLinkPointerLeave?.(h.id)}
+                onLinkActivate={() => onHighlightLinkActivate?.(h.id)}
               />
             ))}
           </div>
         </>
       ) : null}
     </div>
+  );
+}
+
+function fieldConfidencePercent(c: number | null): number | null {
+  if (c == null || !Number.isFinite(c)) return null;
+  if (c > 0 && c <= 1) return Math.round(c * 100);
+  return Math.min(100, Math.max(0, Math.round(c)));
+}
+
+/** Three-bar signal-style confidence (green bars, height increases left→right). */
+function ConfidenceSignalBars({ c }: { c: number | null }) {
+  const pct = fieldConfidencePercent(c);
+  const lit = pct == null ? 0 : pct >= 85 ? 3 : pct >= 55 ? 2 : 1;
+  const label =
+    pct == null ? "Confidence unknown" : `Confidence about ${pct}%`;
+  return (
+    <div
+      className="flex h-4 shrink-0 items-end gap-[3px]"
+      role="img"
+      aria-label={label}
+    >
+      {[0, 1, 2].map((i) => (
+        <span
+          key={i}
+          className={cn(
+            "w-[3px] rounded-[1px]",
+            i < lit ? "bg-emerald-400" : "bg-zinc-700",
+            i === 0 && "h-[5px]",
+            i === 1 && "h-[9px]",
+            i === 2 && "h-[13px]",
+          )}
+        />
+      ))}
+    </div>
+  );
+}
+
+function confidenceMeterHoverText(c: number | null): string {
+  const v = formatConfidenceForTooltip(c);
+  if (v === "—") return "No confidence score";
+  if (c != null && c > 0 && c <= 1) return `Confidence: ${v}%`;
+  return `Confidence: ${v}`;
+}
+
+const reviewValueInputClass =
+  "block w-full min-h-[2.5rem] max-h-28 overflow-y-auto rounded-md border border-zinc-700/50 bg-[#2a2a2c] px-3 py-2.5 text-left text-[13px] leading-snug text-zinc-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] [word-break:break-word] selection:bg-sky-500/25";
+
+type PageFilter = "all" | number;
+
+const SORT_LABELS = ["Page, then name", "Name A–Z", "Confidence (high first)"] as const;
+
+function ExtractedFieldsReviewPanel({
+  fields,
+  linkedHoverFieldId,
+  focusedFieldId,
+  onRowPointerEnter,
+  onRowPointerLeave,
+  onRowActivate,
+  scrollRef,
+  onClose,
+}: {
+  fields: IdPdfFieldHighlight[];
+  linkedHoverFieldId: string | null;
+  focusedFieldId: string | null;
+  onRowPointerEnter: (id: string) => void;
+  onRowPointerLeave: (id: string) => void;
+  onRowActivate: (id: string) => void;
+  scrollRef: RefObject<HTMLDivElement | null>;
+  onClose: () => void;
+}) {
+  const [pageFilter, setPageFilter] = useState<PageFilter>("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [sortIdx, setSortIdx] = useState(0);
+
+  const uniquePages = useMemo(() => {
+    const s = new Set<number>();
+    for (const f of fields) s.add(f.pageNumber);
+    return [...s].sort((a, b) => a - b);
+  }, [fields]);
+
+  const displayFields = useMemo(() => {
+    let out =
+      pageFilter === "all"
+        ? [...fields]
+        : fields.filter((f) => f.pageNumber === pageFilter);
+    const q = searchQuery.trim().toLowerCase();
+    if (q) {
+      out = out.filter(
+        (f) =>
+          f.label.toLowerCase().includes(q) ||
+          (f.value && f.value.toLowerCase().includes(q)),
+      );
+    }
+    if (sortIdx === 1) {
+      out.sort((a, b) =>
+        a.label.localeCompare(b.label, undefined, { sensitivity: "base" }),
+      );
+    } else if (sortIdx === 2) {
+      out.sort((a, b) => {
+        const pa = fieldConfidencePercent(a.confidence);
+        const pb = fieldConfidencePercent(b.confidence);
+        if (pa == null && pb == null) return 0;
+        if (pa == null) return 1;
+        if (pb == null) return -1;
+        return pb - pa;
+      });
+    }
+    return out;
+  }, [fields, pageFilter, searchQuery, sortIdx]);
+
+  const filterTriggerLabel =
+    pageFilter === "all" ? "All fields" : `Page ${pageFilter} only`;
+
+  return (
+    <aside
+      className="flex min-h-0 w-[min(100%,320px)] shrink-0 flex-col border-l border-zinc-800 bg-[#121212] text-zinc-200 sm:w-80"
+      aria-label="All extracted fields"
+    >
+      <div className="shrink-0 border-b border-zinc-800/90 px-3 pb-2.5 pt-3">
+        <div className="flex items-start justify-between gap-2 pr-1">
+          <h2 className="text-[15px] font-semibold leading-tight tracking-tight text-white">
+            All extracted fields
+          </h2>
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="rounded-full border border-zinc-700/80 bg-zinc-900/80 px-2 py-0.5 text-[11px] font-medium tabular-nums text-zinc-400">
+              {fields.length} Field{fields.length === 1 ? "" : "s"}
+            </span>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-8 shrink-0 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+                  onClick={onClose}
+                  aria-label="Close extracted fields panel"
+                >
+                  <X className="size-4" strokeWidth={2} aria-hidden />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="left">Close panel</TooltipContent>
+            </Tooltip>
+          </div>
+        </div>
+        <div className="mt-3 flex items-center gap-2">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 flex-1 justify-between gap-2 border-zinc-600/90 bg-transparent px-2.5 text-xs font-normal text-zinc-200 hover:bg-zinc-900 hover:text-white"
+              >
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <Filter className="size-3.5 shrink-0 opacity-80" aria-hidden />
+                  <span className="truncate">{filterTriggerLabel}</span>
+                </span>
+                <ChevronDown className="size-3.5 shrink-0 opacity-70" aria-hidden />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="start"
+              className="w-52 border-zinc-700 bg-zinc-950 text-zinc-100"
+            >
+              <DropdownMenuItem
+                className="text-xs focus:bg-zinc-800 focus:text-white"
+                onSelect={() => setPageFilter("all")}
+              >
+                All fields
+              </DropdownMenuItem>
+              {uniquePages.map((p) => (
+                <DropdownMenuItem
+                  key={p}
+                  className="text-xs focus:bg-zinc-800 focus:text-white"
+                  onSelect={() => setPageFilter(p)}
+                >
+                  Page {p} only
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className={cn(
+                  "size-8 shrink-0 border-zinc-600/90 bg-transparent text-zinc-300 hover:bg-zinc-900 hover:text-white",
+                  searchOpen && "border-sky-500/50 bg-zinc-900 text-sky-200",
+                )}
+                aria-pressed={searchOpen}
+                aria-label="Search fields"
+                onClick={() => setSearchOpen((v) => !v)}
+              >
+                <Search className="size-3.5" aria-hidden />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Search</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="size-8 shrink-0 border-zinc-600/90 bg-transparent text-zinc-300 hover:bg-zinc-900 hover:text-white"
+                aria-label={`Sort: ${SORT_LABELS[sortIdx % 3]}`}
+                onClick={() => setSortIdx((i) => (i + 1) % 3)}
+              >
+                <ArrowDownUp className="size-3.5" aria-hidden />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{SORT_LABELS[sortIdx % 3]}</TooltipContent>
+          </Tooltip>
+        </div>
+        {searchOpen ? (
+          <div className="mt-2">
+            <Input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Filter by name or value…"
+              className="h-8 border-zinc-600/90 bg-zinc-950/80 text-xs text-zinc-100 placeholder:text-zinc-600 focus-visible:border-zinc-500 focus-visible:ring-sky-500/30"
+            />
+          </div>
+        ) : null}
+      </div>
+      <div
+        ref={scrollRef}
+        className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-4"
+      >
+        {fields.length === 0 ? (
+          <p className="rounded-md border border-dashed border-zinc-700/80 bg-zinc-900/40 px-3 py-4 text-center text-xs text-zinc-500">
+            No extracted-field rows in this run&apos;s IDP output.
+          </p>
+        ) : displayFields.length === 0 ? (
+          <p className="text-center text-xs text-zinc-500">No fields match the current filter.</p>
+        ) : (
+          <ul className="flex flex-col gap-6">
+            {displayFields.map((h) => {
+              const rowHover = linkedHoverFieldId === h.id;
+              const rowFocus = focusedFieldId === h.id;
+              return (
+                <li key={h.id}>
+                  <button
+                    type="button"
+                    data-extracted-field-row={h.id}
+                    className={cn(
+                      "w-full rounded-md text-left transition-colors",
+                      "hover:bg-white/[0.04]",
+                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/40 focus-visible:ring-offset-2 focus-visible:ring-offset-[#121212]",
+                      rowHover && "bg-sky-500/[0.1]",
+                      rowFocus && "bg-sky-500/10 ring-1 ring-inset ring-sky-400/30",
+                    )}
+                    onPointerEnter={() => onRowPointerEnter(h.id)}
+                    onPointerLeave={() => onRowPointerLeave(h.id)}
+                    onClick={() => onRowActivate(h.id)}
+                  >
+                    <div className="flex items-center gap-2 pr-0.5">
+                      <Type
+                        className="size-3.5 shrink-0 text-zinc-500"
+                        strokeWidth={2}
+                        aria-hidden
+                      />
+                      <span className="min-w-0 flex-1 break-words font-mono text-[13px] text-zinc-100">
+                        {h.label}
+                      </span>
+                      <span className="shrink-0 text-[11px] font-medium tabular-nums text-zinc-500">
+                        p{h.pageNumber}
+                      </span>
+                      <Tooltip delayDuration={200}>
+                        <TooltipTrigger asChild>
+                          <span className="inline-flex shrink-0 cursor-default">
+                            <ConfidenceSignalBars c={h.confidence} />
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent
+                          side="left"
+                          className="border-zinc-600 bg-zinc-950 text-xs text-zinc-100"
+                        >
+                          {confidenceMeterHoverText(h.confidence)}
+                        </TooltipContent>
+                      </Tooltip>
+                    </div>
+                    <div
+                      className={cn(
+                        reviewValueInputClass,
+                        "mt-2.5 select-text transition-[border-color,box-shadow,background-color]",
+                        rowHover &&
+                          "border-sky-500/60 bg-sky-500/[0.16] shadow-[inset_0_0_0_1px_rgba(56,189,248,0.35)]",
+                      )}
+                    >
+                      {h.value || "—"}
+                    </div>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+    </aside>
   );
 }
 
@@ -434,19 +779,52 @@ const ZOOM_MIN = 0.55;
 const ZOOM_MAX = 2.45;
 const ZOOM_STEP = 1.12;
 
+/**
+ * Matches `ExtractedFieldsReviewPanel` width (`sm:w-80` / `w-[min(100%,320px)]`).
+ * While the panel is closed, the workspace flex column is still full-width; subtract this so
+ * the PDF opens at the same fit width as after the panel has been opened once.
+ */
+const EXTRACTED_FIELDS_PANEL_LAYOUT_PX = 320;
+
 export function InvoicePdfHighlightViewer({ pdfUrl, runId }: Props) {
   const workspaceRef = useRef<HTMLDivElement>(null);
+  const fieldsPanelScrollRef = useRef<HTMLDivElement>(null);
   const [downloading, setDownloading] = useState(false);
   const [showFieldOverlays, setShowFieldOverlays] = useState(true);
   const [fitMaxCssWidth, setFitMaxCssWidth] = useState(640);
   const [zoomLevel, setZoomLevel] = useState(1);
   const [activePage, setActivePage] = useState(1);
-  const [thumbRailExpanded, setThumbRailExpanded] = useState(true);
   const [parsedHighlights, setParsedHighlights] = useState<IdPdfFieldHighlight[]>([]);
   const [payloadError, setPayloadError] = useState<string | null>(null);
   const [pdfDoc, setPdfDoc] = useState<PDFDocumentProxy | null>(null);
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [pdfLoading, setPdfLoading] = useState(true);
+  const [linkedHoverFieldId, setLinkedHoverFieldId] = useState<string | null>(null);
+  const [focusedFieldId, setFocusedFieldId] = useState<string | null>(null);
+  const [fieldsPanelOpen, setFieldsPanelOpen] = useState(false);
+  const fieldsPanelOpenRef = useRef(fieldsPanelOpen);
+  fieldsPanelOpenRef.current = fieldsPanelOpen;
+  /**
+   * Fit width measured while the right panel is open (narrow workspace), or reserved equivalent
+   * while closed (see `EXTRACTED_FIELDS_PANEL_LAYOUT_PX`). When the panel closes, we keep this
+   * cap and only center — document size stays the same until zoom changes.
+   */
+  const lockedFitMaxRef = useRef<number | null>(null);
+
+  const applyWorkspaceFit = useCallback(() => {
+    const el = workspaceRef.current;
+    if (!el) return;
+    const panelOpen = fieldsPanelOpenRef.current;
+    const reserve = panelOpen ? 0 : EXTRACTED_FIELDS_PANEL_LAYOUT_PX;
+    const raw = Math.max(220, Math.floor(el.clientWidth - 80 - reserve));
+    if (panelOpen) {
+      lockedFitMaxRef.current = raw;
+      setFitMaxCssWidth(raw);
+    } else {
+      const cap = lockedFitMaxRef.current;
+      setFitMaxCssWidth(cap != null ? Math.min(cap, raw) : raw);
+    }
+  }, []);
 
   const displayMaxCssWidth = Math.round(
     Math.min(2800, Math.max(180, fitMaxCssWidth * zoomLevel)),
@@ -456,25 +834,39 @@ export function InvoicePdfHighlightViewer({ pdfUrl, runId }: Props) {
     if (!pdfDoc) return;
     let ro: ResizeObserver | null = null;
     const id = requestAnimationFrame(() => {
-      const el = workspaceRef.current;
-      if (!el) return;
-      const measure = () => {
-        setFitMaxCssWidth(Math.max(220, Math.floor(el.clientWidth - 80)));
-      };
-      measure();
-      ro = new ResizeObserver(measure);
-      ro.observe(el);
+      if (!workspaceRef.current) return;
+      applyWorkspaceFit();
+      ro = new ResizeObserver(() => {
+        applyWorkspaceFit();
+      });
+      ro.observe(workspaceRef.current);
     });
     return () => {
       cancelAnimationFrame(id);
       ro?.disconnect();
     };
-  }, [pdfDoc]);
+  }, [pdfDoc, applyWorkspaceFit]);
+
+  useLayoutEffect(() => {
+    if (!pdfDoc) return;
+    applyWorkspaceFit();
+  }, [fieldsPanelOpen, pdfDoc, applyWorkspaceFit]);
 
   useEffect(() => {
+    lockedFitMaxRef.current = null;
     setActivePage(1);
     setZoomLevel(1);
+    setLinkedHoverFieldId(null);
+    setFocusedFieldId(null);
+    setFieldsPanelOpen(false);
   }, [pdfUrl]);
+
+  useEffect(() => {
+    lockedFitMaxRef.current = null;
+    setLinkedHoverFieldId(null);
+    setFocusedFieldId(null);
+    setFieldsPanelOpen(false);
+  }, [runId]);
 
   useEffect(() => {
     if (!pdfDoc) return;
@@ -550,6 +942,63 @@ export function InvoicePdfHighlightViewer({ pdfUrl, runId }: Props) {
 
   const byPage = (n: number) => parsedHighlights.filter((h) => h.pageNumber === n);
 
+  const sortedFields = useMemo(
+    () =>
+      [...parsedHighlights].sort(
+        (a, b) =>
+          a.pageNumber - b.pageNumber ||
+          a.label.localeCompare(b.label, undefined, { sensitivity: "base" }),
+      ),
+    [parsedHighlights],
+  );
+
+  const onRowPointerEnter = useCallback((id: string) => {
+    setLinkedHoverFieldId(id);
+  }, []);
+
+  const onRowPointerLeave = useCallback((id: string) => {
+    setLinkedHoverFieldId((cur) => (cur === id ? null : cur));
+  }, []);
+
+  const onHighlightLinkPointerEnter = useCallback((id: string) => {
+    setLinkedHoverFieldId(id);
+  }, []);
+
+  const onHighlightLinkPointerLeave = useCallback((id: string) => {
+    setLinkedHoverFieldId((cur) => (cur === id ? null : cur));
+  }, []);
+
+  const onHighlightLinkActivate = useCallback(
+    (id: string) => {
+      const h = parsedHighlights.find((x) => x.id === id);
+      if (h) setActivePage(h.pageNumber);
+      setFocusedFieldId(id);
+    },
+    [parsedHighlights],
+  );
+
+  useEffect(() => {
+    if (!focusedFieldId) return;
+    const root = fieldsPanelScrollRef.current;
+    if (!root) return;
+    const row = root.querySelector(
+      `[data-extracted-field-row="${CSS.escape(focusedFieldId)}"]`,
+    );
+    row?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [focusedFieldId]);
+
+  useEffect(() => {
+    if (!focusedFieldId || !workspaceRef.current) return;
+    const h = parsedHighlights.find((x) => x.id === focusedFieldId);
+    if (!h || h.pageNumber !== activePage) return;
+    const raf = requestAnimationFrame(() => {
+      workspaceRef.current
+        ?.querySelector(`[data-field-highlight-id="${CSS.escape(focusedFieldId)}"]`)
+        ?.scrollIntoView({ block: "center", behavior: "smooth", inline: "nearest" });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [focusedFieldId, activePage, parsedHighlights]);
+
   const handleDownloadPdf = useCallback(async () => {
     if (downloading) return;
     setDownloading(true);
@@ -575,8 +1024,10 @@ export function InvoicePdfHighlightViewer({ pdfUrl, runId }: Props) {
   const zoomIn = () => setZoomLevel((z) => Math.min(ZOOM_MAX, z * ZOOM_STEP));
   const zoomFit = () => setZoomLevel(1);
 
+  /** Bottom toolbar: ~15% smaller than default icon buttons (size-9 / size-4 icons). */
   const toolbarBtnClass =
-    "size-9 text-zinc-700 hover:bg-zinc-200/90 hover:text-zinc-950";
+    "h-[31px] w-[31px] min-h-[31px] min-w-[31px] shrink-0 text-zinc-700 hover:bg-zinc-200/90 hover:text-zinc-950";
+  const toolbarIconClass = "size-[14px]";
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -591,75 +1042,50 @@ export function InvoicePdfHighlightViewer({ pdfUrl, runId }: Props) {
           <p className="shrink-0 px-4 py-3 text-sm text-red-300">{pdfError}</p>
         ) : null}
         {pdfDoc && !pdfError ? (
-          <div className="flex min-h-0 flex-1 flex-row">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-row">
             <aside
-              className={cn(
-                "flex shrink-0 flex-col border-r border-white/[0.06] bg-[#1c1c1e] text-zinc-200 transition-[width] duration-200 ease-out",
-                thumbRailExpanded ? "w-[76px]" : "w-10 overflow-hidden",
-              )}
+              className="flex w-[76px] shrink-0 flex-col border-r border-white/[0.06] bg-[#1c1c1e] text-zinc-200"
               aria-label="Page thumbnails"
             >
-              <div className="flex w-full shrink-0 justify-center border-b border-white/[0.06] px-1 py-2">
-                <Tooltip delayDuration={300}>
-                  <TooltipTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      className="size-9 shrink-0 rounded-md border border-white/15 bg-white/[0.07] text-zinc-100 shadow-sm hover:border-white/25 hover:bg-white/15 hover:text-white"
-                      onClick={() => setThumbRailExpanded((v) => !v)}
-                      aria-expanded={thumbRailExpanded}
-                      aria-label={
-                        thumbRailExpanded
-                          ? "Collapse page thumbnails"
-                          : "Expand page thumbnails"
-                      }
-                    >
-                      {thumbRailExpanded ? (
-                        <PanelLeftClose className="size-5" strokeWidth={2} aria-hidden />
-                      ) : (
-                        <PanelLeft className="size-5" strokeWidth={2} aria-hidden />
-                      )}
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="right">
-                    {thumbRailExpanded ? "Collapse thumbnails" : "Show thumbnails"}
-                  </TooltipContent>
-                </Tooltip>
+              <div className="flex flex-1 flex-col items-center overflow-y-auto py-3 pl-1.5 pr-1">
+                {Array.from({ length: pdfDoc.numPages }, (_, i) => i + 1).map((pageNum) => (
+                  <PdfPageThumbnail
+                    key={pageNum}
+                    pdf={pdfDoc}
+                    pageNumber1={pageNum}
+                    selected={pageNum === activePage}
+                    onSelect={() => setActivePage(pageNum)}
+                  />
+                ))}
               </div>
-              {thumbRailExpanded ? (
-                <div className="flex flex-1 flex-col items-center overflow-y-auto py-2 pl-1.5 pr-1">
-                  {Array.from({ length: pdfDoc.numPages }, (_, i) => i + 1).map((pageNum) => (
-                    <PdfPageThumbnail
-                      key={pageNum}
-                      pdf={pdfDoc}
-                      pageNumber1={pageNum}
-                      selected={pageNum === activePage}
-                      onSelect={() => setActivePage(pageNum)}
-                    />
-                  ))}
-                </div>
-              ) : null}
             </aside>
-            <div
-              ref={workspaceRef}
-              className="relative min-h-0 flex-1 overflow-auto bg-[#323234]"
-            >
-              <div className="relative z-0 flex min-h-full justify-center px-10 pb-28 pt-10">
-                <PdfPageWithHighlights
-                  key={activePage}
-                  pdf={pdfDoc}
-                  pageNumber1={activePage}
-                  maxCssWidth={displayMaxCssWidth}
-                  pageHighlights={byPage(activePage)}
-                  overlayEnabled={showFieldOverlays}
-                  surface="workspace"
-                />
+            {/* Center column: PDF scrolls above; toolbar is a fixed strip below (not inside overflow). */}
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              <div
+                ref={workspaceRef}
+                className="relative min-h-0 min-w-0 flex-1 overflow-auto overflow-x-auto bg-[#323234]"
+              >
+                <div className="relative z-0 flex min-h-full w-full min-w-0 items-center justify-center px-10 pb-10 pt-10">
+                  <PdfPageWithHighlights
+                    key={activePage}
+                    pdf={pdfDoc}
+                    pageNumber1={activePage}
+                    maxCssWidth={displayMaxCssWidth}
+                    pageHighlights={byPage(activePage)}
+                    overlayEnabled={showFieldOverlays}
+                    surface="workspace"
+                    linkedHoverFieldId={linkedHoverFieldId}
+                    focusedFieldId={focusedFieldId}
+                    onHighlightLinkPointerEnter={onHighlightLinkPointerEnter}
+                    onHighlightLinkPointerLeave={onHighlightLinkPointerLeave}
+                    onHighlightLinkActivate={onHighlightLinkActivate}
+                  />
+                </div>
               </div>
-              <div className="pointer-events-none absolute inset-x-0 bottom-4 z-40 flex justify-center">
+              <div className="pointer-events-none z-40 flex shrink-0 justify-center border-t border-white/[0.06] bg-[#323234] py-[0.6375rem]">
                 <div
                   className={cn(
-                    "pointer-events-auto flex items-center gap-0.5 rounded-full border px-1.5 py-1",
+                    "pointer-events-auto flex items-center gap-0 rounded-full border px-[5px] py-[3px]",
                     showFieldOverlays
                       ? "border-zinc-300/90 bg-white shadow-lg shadow-black/20"
                       : "border-black/8 bg-white/93 shadow-md shadow-black/10 backdrop-blur-sm",
@@ -667,92 +1093,151 @@ export function InvoicePdfHighlightViewer({ pdfUrl, runId }: Props) {
                   role="toolbar"
                   aria-label="Document tools"
                 >
-                  <Tooltip delayDuration={300}>
-                    <TooltipTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className={toolbarBtnClass}
-                        onClick={zoomOut}
-                        disabled={zoomLevel <= ZOOM_MIN * 1.001}
-                        aria-label="Zoom out"
-                      >
-                        <ZoomOut className="size-4" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="top">Zoom out</TooltipContent>
-                  </Tooltip>
-                  <Tooltip delayDuration={300}>
-                    <TooltipTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className={toolbarBtnClass}
-                        onClick={zoomIn}
-                        disabled={zoomLevel >= ZOOM_MAX * 0.999}
-                        aria-label="Zoom in"
-                      >
-                        <ZoomIn className="size-4" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="top">Zoom in</TooltipContent>
-                  </Tooltip>
-                  <Tooltip delayDuration={300}>
-                    <TooltipTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className={toolbarBtnClass}
-                        onClick={zoomFit}
-                        aria-label="Fit to width"
-                      >
-                        <Maximize2 className="size-4" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="top">Fit to width</TooltipContent>
-                  </Tooltip>
-                  <Tooltip delayDuration={300}>
-                    <TooltipTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className={cn(
-                          toolbarBtnClass,
-                          showFieldOverlays &&
-                            "bg-sky-500/12 text-sky-900 hover:bg-sky-500/18 hover:text-sky-950",
-                        )}
-                        onClick={() => setShowFieldOverlays((v) => !v)}
-                        aria-pressed={showFieldOverlays}
-                        aria-label="Toggle field highlights"
-                      >
-                        <Layers2 className="size-4" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="top">Field highlights</TooltipContent>
-                  </Tooltip>
-                  <Tooltip delayDuration={300}>
-                    <TooltipTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className={toolbarBtnClass}
-                        disabled={downloading}
-                        onClick={() => void handleDownloadPdf()}
-                        aria-label="Download PDF"
-                      >
-                        <Download className="size-4" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="top">Download PDF</TooltipContent>
-                  </Tooltip>
+                    <Tooltip delayDuration={300}>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className={toolbarBtnClass}
+                          onClick={zoomOut}
+                          disabled={zoomLevel <= ZOOM_MIN * 1.001}
+                          aria-label="Zoom out"
+                        >
+                          <ZoomOut className={toolbarIconClass} />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">Zoom out</TooltipContent>
+                    </Tooltip>
+                    <Tooltip delayDuration={300}>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className={toolbarBtnClass}
+                          onClick={zoomIn}
+                          disabled={zoomLevel >= ZOOM_MAX * 0.999}
+                          aria-label="Zoom in"
+                        >
+                          <ZoomIn className={toolbarIconClass} />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">Zoom in</TooltipContent>
+                    </Tooltip>
+                    <Tooltip delayDuration={300}>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className={toolbarBtnClass}
+                          onClick={zoomFit}
+                          aria-label="Fit to width"
+                        >
+                          <Maximize2 className={toolbarIconClass} />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">Fit to width</TooltipContent>
+                    </Tooltip>
+                    <Tooltip delayDuration={300}>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className={cn(
+                            toolbarBtnClass,
+                            showFieldOverlays &&
+                              "bg-sky-500/12 text-sky-900 hover:bg-sky-500/18 hover:text-sky-950",
+                          )}
+                          onClick={() => setShowFieldOverlays((v) => !v)}
+                          aria-pressed={showFieldOverlays}
+                          aria-label="Toggle field highlights"
+                        >
+                          <Layers2 className={toolbarIconClass} />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">Field highlights</TooltipContent>
+                    </Tooltip>
+                    <Tooltip delayDuration={300}>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className={toolbarBtnClass}
+                          disabled={downloading}
+                          onClick={() => void handleDownloadPdf()}
+                          aria-label="Download PDF"
+                        >
+                          <Download className={toolbarIconClass} />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">Download PDF</TooltipContent>
+                    </Tooltip>
+                    <div
+                      className="mx-0 h-[17px] w-px shrink-0 self-center bg-zinc-400/55"
+                      aria-hidden
+                    />
+                    <Tooltip delayDuration={300}>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className={cn(
+                            toolbarBtnClass,
+                            "rounded-md border border-zinc-400/75 bg-zinc-500/5 shadow-none",
+                            fieldsPanelOpen &&
+                              "border-zinc-500/90 bg-zinc-500/15 text-zinc-900",
+                          )}
+                          onClick={() => setFieldsPanelOpen((v) => !v)}
+                          aria-pressed={fieldsPanelOpen}
+                          aria-expanded={fieldsPanelOpen}
+                          aria-label={
+                            fieldsPanelOpen
+                              ? "Hide extracted fields panel"
+                              : "Show extracted fields panel"
+                          }
+                        >
+                          {fieldsPanelOpen ? (
+                            <PanelRightClose
+                              className={toolbarIconClass}
+                              strokeWidth={2}
+                              aria-hidden
+                            />
+                          ) : (
+                            <PanelRight
+                              className={toolbarIconClass}
+                              strokeWidth={2}
+                              aria-hidden
+                            />
+                          )}
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">
+                        {fieldsPanelOpen
+                          ? "Hide extracted fields"
+                          : "Show extracted fields"}
+                      </TooltipContent>
+                    </Tooltip>
                 </div>
               </div>
             </div>
+            {fieldsPanelOpen ? (
+              <ExtractedFieldsReviewPanel
+                key={runId}
+                fields={sortedFields}
+                linkedHoverFieldId={linkedHoverFieldId}
+                focusedFieldId={focusedFieldId}
+                onRowPointerEnter={onRowPointerEnter}
+                onRowPointerLeave={onRowPointerLeave}
+                onRowActivate={onHighlightLinkActivate}
+                scrollRef={fieldsPanelScrollRef}
+                onClose={() => setFieldsPanelOpen(false)}
+              />
+            ) : null}
           </div>
         ) : null}
         {!pdfLoading && !pdfError && pdfDoc && parsedHighlights.length === 0 ? (

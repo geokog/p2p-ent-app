@@ -591,7 +591,7 @@ export default function ExpertQueuePage() {
         <DialogContent
           centerFlex
           showCloseButton
-          className="flex h-[min(90vh,880px)] w-[min(98vw,60rem)] max-w-[min(98vw,60rem)] flex-col gap-0 overflow-hidden border border-white/[0.08] bg-zinc-900 p-0 text-zinc-100 shadow-xl shadow-black/20 sm:max-w-[min(98vw,60rem)] [&_[data-slot=dialog-close]]:text-zinc-400 [&_[data-slot=dialog-close]]:hover:text-zinc-100"
+          className="flex h-[min(82.8vh,828px)] w-[min(88.2vw,82.8rem)] max-w-[min(88.2vw,82.8rem)] flex-col gap-0 overflow-hidden border border-white/[0.08] bg-zinc-900 p-0 text-zinc-100 shadow-xl shadow-black/20 sm:max-w-[min(88.2vw,82.8rem)] [&_[data-slot=dialog-close]]:text-zinc-400 [&_[data-slot=dialog-close]]:hover:text-zinc-100"
         >
           <DialogHeader className="shrink-0 border-b border-white/[0.07] bg-zinc-900 px-4 py-2 text-left">
             <DialogTitle className="text-base font-medium text-zinc-50">

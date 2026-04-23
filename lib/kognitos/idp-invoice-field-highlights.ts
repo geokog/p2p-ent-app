@@ -573,7 +573,8 @@ function replacerForLog(_key: string, value: unknown): unknown {
   return value;
 }
 
-function formatConfidenceForTooltip(c: number | null): string {
+/** Display confidence for UI (same rules as tooltip: fraction 0–1 → percent, else rounded number). */
+export function formatConfidenceForTooltip(c: number | null): string {
   if (c == null || !Number.isFinite(c)) return "—";
   if (c > 0 && c <= 1) return String(Math.round(c * 100));
   return String(Math.round(c));
