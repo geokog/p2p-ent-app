@@ -155,11 +155,13 @@ export async function runKognitosRefresh(): Promise<KognitosRefreshResult> {
     lastSince = lastCreateIso;
 
     let insertedThisAutomation = 0;
+    let skippedDuplicatesThisAutomation = 0;
     for (const run of remote) {
       const name = String(run.name ?? "");
       const id = runShortIdFromName(name);
       if (!id) continue;
       if (existingIds.has(id)) {
+        skippedDuplicatesThisAutomation += 1;
         skippedAlreadyInDb += 1;
         continue;
       }
@@ -207,6 +209,24 @@ export async function runKognitosRefresh(): Promise<KognitosRefreshResult> {
         "[kognitos sync] failed to record sync metadata",
         automationUuid,
         syncMetaErr,
+      );
+    }
+
+    const { error: histErr } = await supabaseAdmin
+      .from("kognitos_automation_sync_history")
+      .insert({
+        kognitos_automation_id: automationUuid,
+        synced_at: syncNow,
+        new_runs_inserted: insertedThisAutomation,
+        runs_fetched_from_api: remote.length,
+        runs_skipped_duplicates: skippedDuplicatesThisAutomation,
+        sync_mode: isFullBackfill ? "full" : "incremental",
+      });
+    if (histErr) {
+      console.error(
+        "[kognitos sync] failed to append sync history (apply migration 00000000000008?)",
+        automationUuid,
+        histErr,
       );
     }
   }

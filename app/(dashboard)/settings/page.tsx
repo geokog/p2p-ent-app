@@ -23,6 +23,14 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { DOMAIN } from "@/lib/domain.config";
 import { useAuth } from "@/lib/auth-context";
 import { WorkspaceAutomationListRow } from "@/components/kognitos/workspace-automation-list-row";
@@ -41,8 +49,7 @@ type AutomationRow = {
   last_sync_new_runs_inserted: number;
 };
 
-function formatLastRunsSync(iso: string | null): string {
-  if (!iso) return "Not yet synced";
+function formatSyncedAt(iso: string): string {
   try {
     return format(new Date(iso), "MMM d, yyyy, h:mm a");
   } catch {
@@ -50,23 +57,48 @@ function formatLastRunsSync(iso: string | null): string {
   }
 }
 
+function formatSyncMode(mode: string): string {
+  const m = mode.toLowerCase();
+  if (m === "full") return "Full";
+  if (m === "incremental") return "Incremental";
+  return mode;
+}
+
+type SyncHistoryEntry = {
+  id: string;
+  synced_at: string;
+  new_runs_inserted: number;
+  runs_fetched_from_api: number;
+  runs_skipped_duplicates: number;
+  sync_mode: string;
+  kognitos_automation_id: string;
+  automation_display_name: string | null;
+  automation_short_id: string | null;
+};
+
 export default function SettingsPage() {
   const { user } = useAuth();
   const [orgName, setOrgName] = useState("Example Organization");
   const [timezone, setTimezone] = useState("America/New_York");
   const [saved, setSaved] = useState(false);
   const [automations, setAutomations] = useState<AutomationRow[]>([]);
-  const [loadingAutos, setLoadingAutos] = useState(true);
+  const [syncHistory, setSyncHistory] = useState<SyncHistoryEntry[]>([]);
+  const [loadingKognitosSettings, setLoadingKognitosSettings] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
 
-  const loadAutomations = useCallback(async () => {
-    setLoadingAutos(true);
+  const loadKognitosSettings = useCallback(async () => {
+    setLoadingKognitosSettings(true);
     try {
-      const res = await fetch("/api/kognitos/automations");
-      const json = (await res.json()) as { automations?: AutomationRow[] };
-      if (res.ok)
+      const [autosRes, histRes] = await Promise.all([
+        fetch("/api/kognitos/automations"),
+        fetch("/api/kognitos/automations/sync-history?limit=10"),
+      ]);
+      const autosJson = (await autosRes.json()) as {
+        automations?: AutomationRow[];
+      };
+      if (autosRes.ok) {
         setAutomations(
-          (json.automations ?? []).map((a) => ({
+          (autosJson.automations ?? []).map((a) => ({
             ...a,
             total_runs: a.total_runs ?? 0,
             details_url:
@@ -83,22 +115,34 @@ export default function SettingsPage() {
                 : 0,
           })),
         );
+      } else {
+        setAutomations([]);
+      }
+
+      const histJson = (await histRes.json()) as {
+        entries?: SyncHistoryEntry[];
+      };
+      if (histRes.ok) {
+        setSyncHistory(histJson.entries ?? []);
+      } else {
+        setSyncHistory([]);
+      }
     } finally {
-      setLoadingAutos(false);
+      setLoadingKognitosSettings(false);
     }
   }, []);
 
   useEffect(() => {
-    void loadAutomations();
-  }, [loadAutomations]);
+    void loadKognitosSettings();
+  }, [loadKognitosSettings]);
 
   useEffect(() => {
     const onDataChanged = () => {
-      void loadAutomations();
+      void loadKognitosSettings();
     };
     window.addEventListener("chat-data-changed", onDataChanged);
     return () => window.removeEventListener("chat-data-changed", onDataChanged);
-  }, [loadAutomations]);
+  }, [loadKognitosSettings]);
 
   function handleSave() {
     setSaved(true);
@@ -109,7 +153,7 @@ export default function SettingsPage() {
   const isAdmin = user?.role === "admin";
 
   return (
-    <div className="mx-auto max-w-3xl space-y-8">
+    <div className="mx-auto max-w-4xl space-y-8">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
         <p className="text-muted-foreground">
@@ -170,7 +214,7 @@ export default function SettingsPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {loadingAutos ? (
+          {loadingKognitosSettings ? (
             <p className="text-sm text-muted-foreground">Loading…</p>
           ) : automations.length === 0 ? (
             <p className="text-sm text-muted-foreground">
@@ -221,48 +265,81 @@ export default function SettingsPage() {
             Run sync status
           </CardTitle>
           <CardDescription>
-            Per automation: when the app last listed runs from Kognitos and
-            updated Supabase (same action as the top bar sync), and how many new
-            runs were inserted in that pass.
+            Last 10 Kognitos list-runs sync passes (top bar refresh). Each row is
+            one automation after the API returned; new automations appear here
+            after their first sync.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {loadingAutos ? (
+          {loadingKognitosSettings ? (
             <p className="text-sm text-muted-foreground">Loading…</p>
-          ) : automations.length === 0 ? (
+          ) : syncHistory.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              Register an automation above to see sync status.
+              No sync history yet. Register an automation above, then use the top
+              bar refresh to pull runs from Kognitos.
             </p>
           ) : (
-            <div className="grid gap-4 sm:grid-cols-2">
-              {automations.map((a) => (
-                <div
-                  key={a.id}
-                  className="rounded-lg border border-border bg-muted/25 p-4 shadow-sm"
-                >
-                  <p className="font-semibold leading-snug text-foreground">
-                    {a.display_name?.trim() || a.automation_id}
-                  </p>
-                  <dl className="mt-3 space-y-2.5 text-sm">
-                    <div>
-                      <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                        Last sync
-                      </dt>
-                      <dd className="mt-0.5 tabular-nums text-foreground">
-                        {formatLastRunsSync(a.last_runs_sync_at)}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                        New runs inserted (last sync)
-                      </dt>
-                      <dd className="mt-0.5 tabular-nums text-foreground">
-                        {a.last_sync_new_runs_inserted}
-                      </dd>
-                    </div>
-                  </dl>
-                </div>
-              ))}
+            <div className="overflow-x-auto rounded-md border border-border">
+              <Table>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="min-w-[140px] whitespace-normal">
+                      Automation
+                    </TableHead>
+                    <TableHead className="min-w-[11rem] whitespace-normal">
+                      Synced at
+                    </TableHead>
+                    <TableHead className="whitespace-normal">Mode</TableHead>
+                    <TableHead className="text-right tabular-nums whitespace-normal">
+                      Fetched
+                    </TableHead>
+                    <TableHead className="text-right tabular-nums whitespace-normal">
+                      Skipped
+                    </TableHead>
+                    <TableHead className="text-right tabular-nums whitespace-normal">
+                      New runs
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {syncHistory.map((row) => {
+                    const name =
+                      row.automation_display_name?.trim() ||
+                      row.automation_short_id ||
+                      row.kognitos_automation_id.slice(0, 8);
+                    return (
+                      <TableRow key={row.id}>
+                        <TableCell className="max-w-[220px] align-top font-medium">
+                          <span className="line-clamp-2" title={name}>
+                            {name}
+                          </span>
+                          {row.automation_short_id &&
+                          row.automation_display_name?.trim() ? (
+                            <p className="mt-0.5 truncate text-xs font-normal text-muted-foreground tabular-nums">
+                              {row.automation_short_id}
+                            </p>
+                          ) : null}
+                        </TableCell>
+                        <TableCell className="align-top tabular-nums text-muted-foreground">
+                          {formatSyncedAt(row.synced_at)}
+                        </TableCell>
+                        <TableCell className="align-top text-muted-foreground">
+                          {formatSyncMode(row.sync_mode)}
+                        </TableCell>
+                        <TableCell className="align-top text-right tabular-nums">
+                          {row.runs_fetched_from_api}
+                        </TableCell>
+                        <TableCell className="align-top text-right tabular-nums text-muted-foreground">
+                          {row.runs_skipped_duplicates}
+                        </TableCell>
+                        <TableCell className="align-top text-right tabular-nums font-medium text-foreground">
+                          {row.new_runs_inserted}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
             </div>
           )}
         </CardContent>
@@ -277,7 +354,7 @@ export default function SettingsPage() {
           title="Add Kognitos automations"
           onOpenChange={setAddOpen}
           onCompleted={() => {
-            void loadAutomations();
+            void loadKognitosSettings();
           }}
         />
       ) : null}
