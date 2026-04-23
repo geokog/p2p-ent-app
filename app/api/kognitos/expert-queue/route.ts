@@ -14,9 +14,18 @@ import {
   whyThisMattersValidationQueue,
 } from "@/lib/kognitos/expert-queue-issue";
 import {
+  inputRowsHaveInvoiceDocumentLabel,
+  payloadHasInvoiceDocumentUserInput,
+} from "@/lib/kognitos/extract-run-input-files";
+import {
   inferValidationChecks,
   normalizeKognitosRowForDashboard,
 } from "@/lib/kognitos/normalize-dashboard-run";
+import {
+  isKognitosFileDownloadConfigured,
+  resolveInvoicePdfFileIdFromRun,
+  type RunInputFileRow,
+} from "@/lib/kognitos/resolve-invoice-pdf-file-id";
 import { kognitosRunReachedCompletedState } from "@/lib/kognitos/run-display";
 import { supabaseAdmin } from "@/lib/supabase";
 
@@ -82,6 +91,40 @@ export async function GET() {
     }
   }
 
+  const runIds = rows.map((r) => String(r.id));
+  const inputsByRunId = new Map<string, RunInputFileRow[]>();
+  if (runIds.length > 0) {
+    const { data: inputRows, error: inErr } = await supabaseAdmin
+      .from("kognitos_run_inputs")
+      .select("kognitos_run_id, kognitos_file_id, file_name, input_key")
+      .in("kognitos_run_id", runIds);
+    if (!inErr && inputRows) {
+      for (const raw of inputRows) {
+        const r = raw as {
+          kognitos_run_id?: string;
+          kognitos_file_id?: string;
+          file_name?: string | null;
+          input_key?: string;
+        };
+        const rid = String(r.kognitos_run_id ?? "");
+        if (!rid) continue;
+        const inputRow: RunInputFileRow = {
+          kognitos_file_id: String(r.kognitos_file_id ?? ""),
+          file_name:
+            typeof r.file_name === "string" || r.file_name === null
+              ? r.file_name
+              : null,
+          input_key: String(r.input_key ?? ""),
+        };
+        const list = inputsByRunId.get(rid) ?? [];
+        list.push(inputRow);
+        inputsByRunId.set(rid, list);
+      }
+    }
+  }
+
+  const kognitosPdf = isKognitosFileDownloadConfigured();
+
   const items: ExpertQueueRow[] = [];
 
   for (const row of rows) {
@@ -89,6 +132,15 @@ export async function GET() {
       row.payload && typeof row.payload === "object" && !Array.isArray(row.payload)
         ? (row.payload as Record<string, unknown>)
         : {};
+    const inputList = inputsByRunId.get(String(row.id)) ?? [];
+    const hasInvoiceDocumentInput =
+      payloadHasInvoiceDocumentUserInput(payload) ||
+      inputRowsHaveInvoiceDocumentLabel(inputList);
+    /** Same rule as `/api/kognitos/runs`: any resolvable invoice file shows the button. */
+    const invoicePdfUrl =
+      kognitosPdf && Boolean(resolveInvoicePdfFileIdFromRun(payload, inputList))
+        ? `/api/kognitos/runs/${encodeURIComponent(String(row.id))}/invoice-pdf`
+        : null;
     const issue = parseExpertQueueIssue(payload);
     const checks = inferValidationChecks(payload);
     const validationEligible = kognitosRunReachedCompletedState(payload);
@@ -150,6 +202,8 @@ export async function GET() {
         locationHint: issue.locationHint,
         resolutionSteps: resolutionStepsForIssue(issue),
         kognitosRunUrl,
+        hasInvoiceDocumentInput,
+        invoicePdfUrl,
         updateTime,
         createTime,
       });
@@ -170,6 +224,8 @@ export async function GET() {
       validationTags,
       resolutionSteps: resolutionStepsForValidationQueue(),
       kognitosRunUrl,
+      hasInvoiceDocumentInput,
+      invoicePdfUrl,
       updateTime,
       createTime,
     });

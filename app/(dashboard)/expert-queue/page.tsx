@@ -27,11 +27,18 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   EXPERT_QUEUE_VALIDATION_TAG_LABEL,
   type ExpertQueueIssueBadge,
   type ExpertQueueRow,
   type ExpertQueueValidationTag,
 } from "@/lib/kognitos/expert-queue-issue";
+import { InvoicePdfHighlightViewer } from "@/components/kognitos/invoice-pdf-highlight-viewer";
 import { cn } from "@/lib/utils";
 
 const ISSUE_BADGE_LABEL: Record<ExpertQueueIssueBadge, string> = {
@@ -321,6 +328,10 @@ export default function ExpertQueuePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pins, setPins] = useState<ExpertQueuePinMap>({});
+  const [invoiceViewer, setInvoiceViewer] = useState<{
+    runId: string;
+    pdfUrl: string;
+  } | null>(null);
 
   useEffect(() => {
     setPins(loadExpertQueuePins());
@@ -479,17 +490,41 @@ export default function ExpertQueuePage() {
                   </div>
                   <div className="flex w-full shrink-0 flex-col items-start gap-1 sm:w-auto sm:items-end">
                     <RelativeQueueTime iso={item.updateTime ?? item.createTime} />
-                    {item.kognitosRunUrl ? (
-                      <a
-                        href={item.kognitosRunUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-sm font-medium text-blue-600 underline-offset-4 hover:underline dark:text-blue-400"
-                      >
-                        Open Run
-                        <ExternalLink className="size-3.5 shrink-0 opacity-80" />
-                      </a>
-                    ) : null}
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      {item.invoicePdfUrl || item.hasInvoiceDocumentInput ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 rounded-lg border-border bg-background px-3 text-xs font-medium shadow-none"
+                          onClick={() => {
+                            if (item.invoicePdfUrl) {
+                              setInvoiceViewer({
+                                runId: item.runId,
+                                pdfUrl: item.invoicePdfUrl,
+                              });
+                            } else {
+                              window.alert(
+                                "No invoice file could be resolved for this run, or Kognitos file download is not configured in the app.",
+                              );
+                            }
+                          }}
+                        >
+                          Invoice
+                        </Button>
+                      ) : null}
+                      {item.kognitosRunUrl ? (
+                        <a
+                          href={item.kognitosRunUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-sm font-medium text-blue-600 underline-offset-4 hover:underline dark:text-blue-400"
+                        >
+                          Open Run
+                          <ExternalLink className="size-3.5 shrink-0 opacity-80" />
+                        </a>
+                      ) : null}
+                    </div>
                   </div>
                 </div>
 
@@ -500,12 +535,20 @@ export default function ExpertQueuePage() {
                 <div className="mt-5 border-t border-border/70 pt-4">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                     <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
-                      <p>
-                        <span className="text-muted-foreground">Invoice </span>
-                        <span className="text-foreground">
-                          {item.invoiceNumber}
-                        </span>
-                      </p>
+                      <div className="flex min-w-0 flex-col gap-0.5">
+                        <p className="min-w-0">
+                          <span className="text-muted-foreground">Invoice </span>
+                          <span className="text-foreground">
+                            {item.invoiceNumber}
+                          </span>
+                        </p>
+                        <p className="min-w-0 break-all text-xs text-muted-foreground">
+                          <span className="text-muted-foreground">Run ID </span>
+                          <span className="font-mono text-foreground/90">
+                            {item.runId}
+                          </span>
+                        </p>
+                      </div>
                       <p>
                         <span className="text-muted-foreground">Value </span>
                         <span className="text-foreground">
@@ -538,6 +581,31 @@ export default function ExpertQueuePage() {
           );
         })}
       </div>
+
+      <Dialog
+        open={invoiceViewer != null}
+        onOpenChange={(open) => {
+          if (!open) setInvoiceViewer(null);
+        }}
+      >
+        <DialogContent
+          centerFlex
+          showCloseButton
+          className="flex h-[min(90vh,880px)] w-[min(98vw,60rem)] max-w-[min(98vw,60rem)] flex-col gap-0 overflow-hidden border border-white/[0.08] bg-zinc-900 p-0 text-zinc-100 shadow-xl shadow-black/20 sm:max-w-[min(98vw,60rem)] [&_[data-slot=dialog-close]]:text-zinc-400 [&_[data-slot=dialog-close]]:hover:text-zinc-100"
+        >
+          <DialogHeader className="shrink-0 border-b border-white/[0.07] bg-zinc-900 px-4 py-2 text-left">
+            <DialogTitle className="text-base font-medium text-zinc-50">
+              Document Processing
+            </DialogTitle>
+          </DialogHeader>
+          {invoiceViewer ? (
+            <InvoicePdfHighlightViewer
+              pdfUrl={invoiceViewer.pdfUrl}
+              runId={invoiceViewer.runId}
+            />
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

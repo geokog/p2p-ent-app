@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { getIdpHighlightPayloadDiagnostics } from "@/lib/kognitos/idp-invoice-field-highlights";
 import { supabaseAdmin } from "@/lib/supabase";
 
 /**
@@ -23,6 +24,34 @@ export async function GET(
     .select("payload")
     .eq("id", id)
     .maybeSingle();
+
+  const rowReturned = data != null;
+  const payloadExists =
+    data != null &&
+    data.payload != null &&
+    typeof data.payload === "object" &&
+    !Array.isArray(data.payload);
+
+  const diag = payloadExists
+    ? getIdpHighlightPayloadDiagnostics(data.payload)
+    : {
+        payloadIsObject: false,
+        hasIdpExtractionResults: false,
+        fieldsListItemsLength: 0,
+        extractedFieldItemsCount: 0,
+        normalizedHighlightsCount: 0,
+      };
+
+  console.log("[kognitos_runs payload GET]", {
+    runId: id,
+    kognitosRunsRowReturned: rowReturned,
+    kognitosRunsPayloadExists: payloadExists,
+    hasIdpExtractionResults: diag.hasIdpExtractionResults,
+    fieldsListItemsLength: diag.fieldsListItemsLength,
+    extractedFieldItemsCount: diag.extractedFieldItemsCount,
+    normalizedHighlightsCount: diag.normalizedHighlightsCount,
+    supabaseError: error?.message ?? null,
+  });
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });

@@ -199,6 +199,8 @@ Dashboard KPIs, **Runs analyzed**, **Expert Queue**, validation columns (DOC / Q
    - `GET /api/kognitos/runs/[id]` — maps `payload` through [`lib/kognitos/map-run.ts`](lib/kognitos/map-run.ts) to the **`KognitosRun`** shape (focused on stage/state/user inputs). **It does not re-expose the entire `outputs` tree**; for deep output inspection, use (1)–(3) above.  
    - `GET /api/kognitos/runs/[id]/payload` — returns the **raw** `payload` JSON for that stored run (used by the **Runs / Invoices analyzed** validation icons to open the markdown validation report in a dialog).
 
+**IDP invoice PDF field highlights (bounding boxes):** the Expert Queue invoice dialog loads that same raw `payload` and parses IDP `extracted_field` rows for overlays. Full path notes, numeric decoding, and a reuse checklist live in [`docs/idp-invoice-pdf-highlights.md`](docs/idp-invoice-pdf-highlights.md).
+
 **Import runs from Kognitos:** use the **refresh icon** in the top bar (next to notifications). It calls `POST /api/kognitos/sync`, which loops **registered automations** in Supabase, paginates ListRuns per automation, inserts new rows with the correct automation link, and reindexes inputs (incremental per automation using the latest stored `create_time`). Requires Supabase service role + Kognitos base URL, token, org, and workspace (see above). Admins can register automations in onboarding or **Settings**.
 
 **Manual cleanup (Supabase only):** To remove synced data, use the SQL editor with a role that can delete from these tables. **Back up first.** Delete one automation by short id (same as in API paths / env):

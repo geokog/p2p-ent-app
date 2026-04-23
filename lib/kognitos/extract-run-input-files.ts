@@ -94,6 +94,82 @@ export function extractFileRefsFromKognitosPayload(
   return out;
 }
 
+const INVOICE_DOCUMENT_KEY_NORMALIZED = "invoice document";
+
+function normalizeUserInputKeyForCompare(key: string): string {
+  return key
+    .trim()
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .replace(/[\s_\-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function userInputMapsToScan(payload: Record<string, unknown>): unknown[] {
+  const maps: unknown[] = [
+    payload.userInputs,
+    payload.user_inputs,
+  ];
+  const inv = payload.invocationDetails ?? payload.invocation_details;
+  const ir = getRecord(inv);
+  if (ir) {
+    maps.push(ir.userInputs, ir.user_inputs);
+  }
+  return maps;
+}
+
+/**
+ * True when `kognitos_run_inputs.input_key` matches the Invoice Document label
+ * (Kognitos often stores the display name here even when payload keys differ).
+ */
+export function inputRowsHaveInvoiceDocumentLabel(
+  rows: readonly { input_key: string }[],
+): boolean {
+  for (const r of rows) {
+    if (
+      normalizeUserInputKeyForCompare(r.input_key) === INVOICE_DOCUMENT_KEY_NORMALIZED
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * True when the run payload includes an input keyed like "Invoice Document"
+ * (`userInputs`, `invocationDetails`, executable step `inputs`, or extracted file refs).
+ */
+export function payloadHasInvoiceDocumentUserInput(
+  payload: Record<string, unknown>,
+): boolean {
+  const checkKey = (key: string) =>
+    normalizeUserInputKeyForCompare(key) === INVOICE_DOCUMENT_KEY_NORMALIZED;
+
+  for (const ui of userInputMapsToScan(payload)) {
+    if (!ui || typeof ui !== "object" || Array.isArray(ui)) continue;
+    for (const key of Object.keys(ui as Record<string, unknown>)) {
+      if (checkKey(key)) return true;
+    }
+  }
+
+  const steps =
+    payload.executableSteps ?? payload.executable_steps ?? payload.executableSteps;
+  const srec = getRecord(steps);
+  const stepInputs = srec?.inputs;
+  if (stepInputs && typeof stepInputs === "object" && !Array.isArray(stepInputs)) {
+    for (const key of Object.keys(stepInputs as Record<string, unknown>)) {
+      if (checkKey(key)) return true;
+    }
+  }
+
+  for (const ref of extractFileRefsFromKognitosPayload(payload)) {
+    if (checkKey(ref.inputKey)) return true;
+  }
+
+  return false;
+}
+
 /**
  * Normalize API `file.remote` to the `{file}` path segment for `:download`.
  * Handles full resource names and bare ids.

@@ -90,18 +90,44 @@ const DEMO_RUNS_ANALYZED_VALUES_USD = [
   14_000,
 ] as const;
 
-/** Cycle demo vendor + value by row index (row 0 = BioPure + $114,800 when filter is All). */
-function assignDemoRunsAnalyzedTableFields(
-  runs: KognitosDashboardRun[],
-): KognitosDashboardRun[] {
-  const nv = DEMO_RUNS_ANALYZED_VENDORS.length;
-  const nd = DEMO_RUNS_ANALYZED_VALUES_USD.length;
-  return runs.map((r, i) => ({
+/** Only the first N rows in default Runs Analyzed order get demo vendor/value. */
+const DEMO_RUNS_ANALYZED_ROW_CAP = 10;
+
+/** Map run id → demo slot index (0..9) for rows in the first `DEMO_RUNS_ANALYZED_ROW_CAP` of `sortedRuns`. */
+function buildFirstTenRunsAnalyzedDemoIndexById(
+  sortedRuns: KognitosDashboardRun[],
+): Map<string, number> {
+  const m = new Map<string, number>();
+  const n = Math.min(DEMO_RUNS_ANALYZED_ROW_CAP, sortedRuns.length);
+  for (let i = 0; i < n; i++) {
+    m.set(sortedRuns[i].id, i);
+  }
+  return m;
+}
+
+function effectiveRunsAnalyzedVendorForFilter(
+  r: KognitosDashboardRun,
+  demoIdxById: Map<string, number>,
+): string {
+  const di = demoIdxById.get(r.id);
+  if (di !== undefined) return DEMO_RUNS_ANALYZED_VENDORS[di];
+  return r.vendor;
+}
+
+function applyRunsAnalyzedDemoRowFields(
+  r: KognitosDashboardRun,
+  demoIdxById: Map<string, number>,
+  /** When set, force vendor label for filtered view (first-ten rows only). */
+  forcedVendor: string | null,
+): KognitosDashboardRun {
+  const di = demoIdxById.get(r.id);
+  if (di === undefined) return r;
+  return {
     ...r,
-    vendor: DEMO_RUNS_ANALYZED_VENDORS[i % nv],
+    vendor: forcedVendor ?? DEMO_RUNS_ANALYZED_VENDORS[di],
     vendorIsFromDedicatedKeys: true,
-    value: DEMO_RUNS_ANALYZED_VALUES_USD[i % nd],
-  }));
+    value: DEMO_RUNS_ANALYZED_VALUES_USD[di],
+  };
 }
 
 const currencyFmt = new Intl.NumberFormat("en-US", {
@@ -593,9 +619,11 @@ export function KognitosRunsDashboard() {
   const runsForTabCounts = useMemo(() => {
     if (demoDataEnabled) {
       const sorted = sortDashboardRunsForDisplay(periodRuns);
-      const labeled = assignDemoRunsAnalyzedTableFields(sorted);
-      if (vendorFilter === "all") return labeled;
-      return labeled.filter((r) => r.vendor === vendorFilter);
+      const demoIdxById = buildFirstTenRunsAnalyzedDemoIndexById(sorted);
+      if (vendorFilter === "all") return sorted;
+      return sorted.filter(
+        (r) => effectiveRunsAnalyzedVendorForFilter(r, demoIdxById) === vendorFilter,
+      );
     }
     if (vendorFilter === "all") return periodRuns;
     return periodRuns.filter((r) => r.vendor === vendorFilter);
@@ -622,23 +650,28 @@ export function KognitosRunsDashboard() {
       return sortKognitosDashboardRunsByColumn(vendorFiltered, runSort);
     }
 
-    const preLabeled = assignDemoRunsAnalyzedTableFields(sorted);
-    const filtered =
+    const demoIdxById = buildFirstTenRunsAnalyzedDemoIndexById(sorted);
+    const vendorFiltered =
       vendorFilter === "all"
-        ? preLabeled
-        : preLabeled.filter((r) => r.vendor === vendorFilter);
-    const columnSorted = sortKognitosDashboardRunsByColumn(filtered, runSort);
+        ? sorted
+        : sorted.filter(
+            (r) =>
+              effectiveRunsAnalyzedVendorForFilter(r, demoIdxById) ===
+              vendorFilter,
+          );
+    const columnSorted = sortKognitosDashboardRunsByColumn(
+      vendorFiltered,
+      runSort,
+    );
 
     if (vendorFilter === "all") {
-      return assignDemoRunsAnalyzedTableFields(columnSorted);
+      return columnSorted.map((r) =>
+        applyRunsAnalyzedDemoRowFields(r, demoIdxById, null),
+      );
     }
-    const nd = DEMO_RUNS_ANALYZED_VALUES_USD.length;
-    return columnSorted.map((r, i) => ({
-      ...r,
-      vendor: vendorFilter,
-      vendorIsFromDedicatedKeys: true,
-      value: DEMO_RUNS_ANALYZED_VALUES_USD[i % nd],
-    }));
+    return columnSorted.map((r) =>
+      applyRunsAnalyzedDemoRowFields(r, demoIdxById, vendorFilter),
+    );
   }, [tabFiltered, vendorFilter, demoDataEnabled, runSort]);
 
   const handleSortColumn = useCallback((key: DashboardRunSortKey) => {

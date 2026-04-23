@@ -54,6 +54,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { InvoicePdfHighlightViewer } from "@/components/kognitos/invoice-pdf-highlight-viewer";
 import { KognitosRunResultsDialog } from "@/components/kognitos/kognitos-run-results-dialog";
 import {
   Tooltip,
@@ -327,8 +328,10 @@ export function KognitosRunsAnalyzedTable({
   totalRowCount,
   surface = "card",
 }: KognitosRunsAnalyzedTableProps) {
-  const [invoicePdfOpen, setInvoicePdfOpen] = useState(false);
-  const [invoicePdfSrc, setInvoicePdfSrc] = useState<string | null>(null);
+  const [invoiceViewer, setInvoiceViewer] = useState<{
+    pdfUrl: string;
+    runId: string;
+  } | null>(null);
   const [reanalyzeRun, setReanalyzeRun] = useState<KognitosDashboardRun | null>(
     null,
   );
@@ -554,8 +557,12 @@ export function KognitosRunsAnalyzedTable({
                                   <button
                                     type="button"
                                     onClick={() => {
-                                      setInvoicePdfSrc(row.invoicePdfUrl);
-                                      setInvoicePdfOpen(true);
+                                      const pdfUrl = row.invoicePdfUrl;
+                                      if (!pdfUrl) return;
+                                      setInvoiceViewer({
+                                        pdfUrl,
+                                        runId: row.id,
+                                      });
                                     }}
                                     className={cn(
                                       "text-left text-foreground underline-offset-4 hover:underline",
@@ -893,31 +900,27 @@ export function KognitosRunsAnalyzedTable({
       </Dialog>
 
       <Dialog
-        open={invoicePdfOpen}
+        open={invoiceViewer != null}
         onOpenChange={(open) => {
-          setInvoicePdfOpen(open);
-          if (!open) setInvoicePdfSrc(null);
+          if (!open) setInvoiceViewer(null);
         }}
       >
         <DialogContent
+          centerFlex
           showCloseButton
-          className="flex h-[min(86vh,820px)] w-[min(96vw,56rem)] max-w-[min(96vw,56rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(96vw,56rem)]"
+          className="flex h-[min(90vh,880px)] w-[min(98vw,60rem)] max-w-[min(98vw,60rem)] flex-col gap-0 overflow-hidden border border-white/[0.08] bg-zinc-900 p-0 text-zinc-100 shadow-xl shadow-black/20 sm:max-w-[min(98vw,60rem)] [&_[data-slot=dialog-close]]:text-zinc-400 [&_[data-slot=dialog-close]]:hover:text-zinc-100"
         >
-          <DialogHeader className="shrink-0 border-b px-4 py-3 text-left">
-            <DialogTitle>Supplier invoice</DialogTitle>
-            <DialogDescription>
-              PDF from the automation file input (streamed from Kognitos).
-            </DialogDescription>
+          <DialogHeader className="shrink-0 border-b border-white/[0.07] bg-zinc-900 px-4 py-2 text-left">
+            <DialogTitle className="text-base font-medium text-zinc-50">
+              Document Processing
+            </DialogTitle>
           </DialogHeader>
-          <div className="min-h-0 flex-1 bg-muted">
-            {invoicePdfSrc ? (
-              <iframe
-                title="Supplier invoice PDF"
-                src={invoicePdfSrc}
-                className="size-full min-h-[400px] border-0"
-              />
-            ) : null}
-          </div>
+          {invoiceViewer ? (
+            <InvoicePdfHighlightViewer
+              pdfUrl={invoiceViewer.pdfUrl}
+              runId={invoiceViewer.runId}
+            />
+          ) : null}
         </DialogContent>
       </Dialog>
 

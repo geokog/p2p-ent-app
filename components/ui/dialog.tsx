@@ -51,10 +51,55 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
+  centerFlex = false,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
+  /**
+   * Centers the panel with flexbox instead of translate(-50%, -50%) on the dialog root.
+   * Keeps bitmap/canvas content (e.g. PDF.js) sharp; pass sizing/rounded styles via className
+   * on the inner card.
+   */
+  centerFlex?: boolean
 }) {
+  const closeButton = showCloseButton ? (
+    <DialogPrimitive.Close
+      data-slot="dialog-close"
+      className="ring-offset-background focus:ring-ring data-[state=open]:bg-accent data-[state=open]:text-muted-foreground absolute top-4 right-4 z-10 rounded-xs opacity-70 transition-opacity hover:opacity-100 focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
+    >
+      <XIcon />
+      <span className="sr-only">Close</span>
+    </DialogPrimitive.Close>
+  ) : null
+
+  if (centerFlex) {
+    return (
+      <DialogPortal data-slot="dialog-portal">
+        <DialogOverlay />
+        <DialogPrimitive.Content
+          data-slot="dialog-content"
+          className={cn(
+            "pointer-events-none fixed inset-0 z-50 flex items-center justify-center border-0 bg-transparent p-3 shadow-none outline-none sm:p-4",
+            "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 duration-200",
+          )}
+          {...props}
+        >
+          <div
+            data-slot="dialog-content-inner"
+            className={cn(
+              "pointer-events-auto relative flex w-full max-w-[calc(100%-2rem)] flex-col gap-4 overflow-hidden rounded-lg border bg-background p-6 shadow-lg outline-none sm:max-w-lg",
+              "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 duration-200",
+              className,
+            )}
+          >
+            {children}
+            {closeButton}
+          </div>
+        </DialogPrimitive.Content>
+      </DialogPortal>
+    )
+  }
+
   return (
     <DialogPortal data-slot="dialog-portal">
       <DialogOverlay />
@@ -67,15 +112,7 @@ function DialogContent({
         {...props}
       >
         {children}
-        {showCloseButton && (
-          <DialogPrimitive.Close
-            data-slot="dialog-close"
-            className="ring-offset-background focus:ring-ring data-[state=open]:bg-accent data-[state=open]:text-muted-foreground absolute top-4 right-4 rounded-xs opacity-70 transition-opacity hover:opacity-100 focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
-          >
-            <XIcon />
-            <span className="sr-only">Close</span>
-          </DialogPrimitive.Close>
-        )}
+        {closeButton}
       </DialogPrimitive.Content>
     </DialogPortal>
   )

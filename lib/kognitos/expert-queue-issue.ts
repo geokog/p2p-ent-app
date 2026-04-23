@@ -569,6 +569,13 @@ export type ExpertQueueRow = {
   locationHint?: string;
   resolutionSteps: string[];
   kognitosRunUrl: string | null;
+  /** User inputs include an "Invoice Document" field on the run payload. */
+  hasInvoiceDocumentInput: boolean;
+  /**
+   * Same-origin PDF proxy when Kognitos file download is configured and a run invoice
+   * file can be resolved (same logic as the Runs Analyzed table).
+   */
+  invoicePdfUrl: string | null;
   updateTime: string | null;
   createTime: string | null;
 };
