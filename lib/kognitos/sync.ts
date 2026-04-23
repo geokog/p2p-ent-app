@@ -154,6 +154,7 @@ export async function runKognitosRefresh(): Promise<KognitosRefreshResult> {
     lastMode = isFullBackfill ? "full" : "incremental";
     lastSince = lastCreateIso;
 
+    let insertedThisAutomation = 0;
     for (const run of remote) {
       const name = String(run.name ?? "");
       const id = runShortIdFromName(name);
@@ -183,12 +184,29 @@ export async function runKognitosRefresh(): Promise<KognitosRefreshResult> {
         }
         throw error;
       }
+      insertedThisAutomation += 1;
       allInserted.push(id);
       existingIds.add(id);
 
       await reindexKognitosRunInputsForRun(
         id,
         rowInsert.payload as Record<string, unknown>,
+      );
+    }
+
+    const syncNow = new Date().toISOString();
+    const { error: syncMetaErr } = await supabaseAdmin
+      .from("kognitos_automations")
+      .update({
+        last_runs_sync_at: syncNow,
+        last_sync_new_runs_inserted: insertedThisAutomation,
+      })
+      .eq("id", automationUuid);
+    if (syncMetaErr) {
+      console.error(
+        "[kognitos sync] failed to record sync metadata",
+        automationUuid,
+        syncMetaErr,
       );
     }
   }

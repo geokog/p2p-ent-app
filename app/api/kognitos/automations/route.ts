@@ -25,7 +25,7 @@ export async function GET() {
   const { data, error } = await supabaseAdmin
     .from("kognitos_automations")
     .select(
-      "id, automation_id, resource_name, display_name, description, created_at",
+      "id, automation_id, resource_name, display_name, description, created_at, last_runs_sync_at, last_sync_new_runs_inserted",
     )
     .order("created_at", { ascending: true });
 

@@ -2,12 +2,14 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { format } from "date-fns";
 import {
   Building2,
   Users,
   Save,
   ChevronRight,
   Plus,
+  RefreshCw,
 } from "lucide-react";
 import {
   Card,
@@ -34,7 +36,19 @@ type AutomationRow = {
   resource_name: string | null;
   total_runs: number;
   details_url: string | null;
+  /** ISO timestamp from `kognitos_automations.last_runs_sync_at` */
+  last_runs_sync_at: string | null;
+  last_sync_new_runs_inserted: number;
 };
+
+function formatLastRunsSync(iso: string | null): string {
+  if (!iso) return "Not yet synced";
+  try {
+    return format(new Date(iso), "MMM d, yyyy, h:mm a");
+  } catch {
+    return iso;
+  }
+}
 
 export default function SettingsPage() {
   const { user } = useAuth();
@@ -59,6 +73,14 @@ export default function SettingsPage() {
               typeof a.details_url === "string" && a.details_url.length > 0
                 ? a.details_url
                 : null,
+            last_runs_sync_at:
+              typeof a.last_runs_sync_at === "string"
+                ? a.last_runs_sync_at
+                : null,
+            last_sync_new_runs_inserted:
+              typeof a.last_sync_new_runs_inserted === "number"
+                ? a.last_sync_new_runs_inserted
+                : 0,
           })),
         );
     } finally {
@@ -68,6 +90,14 @@ export default function SettingsPage() {
 
   useEffect(() => {
     void loadAutomations();
+  }, [loadAutomations]);
+
+  useEffect(() => {
+    const onDataChanged = () => {
+      void loadAutomations();
+    };
+    window.addEventListener("chat-data-changed", onDataChanged);
+    return () => window.removeEventListener("chat-data-changed", onDataChanged);
   }, [loadAutomations]);
 
   function handleSave() {
@@ -180,6 +210,60 @@ export default function SettingsPage() {
             <p className="text-xs text-muted-foreground">
               Only admins can register additional automations.
             </p>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <RefreshCw className="h-5 w-5" aria-hidden />
+            Run sync status
+          </CardTitle>
+          <CardDescription>
+            Per automation: when the app last listed runs from Kognitos and
+            updated Supabase (same action as the top bar sync), and how many new
+            runs were inserted in that pass.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {loadingAutos ? (
+            <p className="text-sm text-muted-foreground">Loading…</p>
+          ) : automations.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Register an automation above to see sync status.
+            </p>
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2">
+              {automations.map((a) => (
+                <div
+                  key={a.id}
+                  className="rounded-lg border border-border bg-muted/25 p-4 shadow-sm"
+                >
+                  <p className="font-semibold leading-snug text-foreground">
+                    {a.display_name?.trim() || a.automation_id}
+                  </p>
+                  <dl className="mt-3 space-y-2.5 text-sm">
+                    <div>
+                      <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Last sync
+                      </dt>
+                      <dd className="mt-0.5 tabular-nums text-foreground">
+                        {formatLastRunsSync(a.last_runs_sync_at)}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        New runs inserted (last sync)
+                      </dt>
+                      <dd className="mt-0.5 tabular-nums text-foreground">
+                        {a.last_sync_new_runs_inserted}
+                      </dd>
+                    </div>
+                  </dl>
+                </div>
+              ))}
+            </div>
           )}
         </CardContent>
       </Card>
