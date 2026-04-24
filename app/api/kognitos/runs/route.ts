@@ -7,7 +7,7 @@ import {
 } from "@/lib/kognitos/normalize-dashboard-run";
 import {
   isKognitosFileDownloadConfigured,
-  resolveInvoicePdfFileIdFromRun,
+  listInvoicePdfFileIdCandidatesFromRun,
   type RunInputFileRow,
 } from "@/lib/kognitos/resolve-invoice-pdf-file-id";
 import { getRequestIdFromRunPayload } from "@/lib/kognitos/run-payload";
@@ -193,7 +193,7 @@ export async function GET() {
     const inputList = inputsByRunId.get(String(row.id)) ?? [];
     const hasPdf =
       kognitosPdf &&
-      Boolean(resolveInvoicePdfFileIdFromRun(payload, inputList));
+      listInvoicePdfFileIdCandidatesFromRun(payload, inputList).length > 0;
     const invoicePdfUrl = hasPdf
       ? `/api/kognitos/runs/${encodeURIComponent(String(row.id))}/invoice-pdf`
       : null;

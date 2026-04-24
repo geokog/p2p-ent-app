@@ -3,10 +3,13 @@ import { NextResponse } from "next/server";
 import { downloadOrganizationFile } from "@/lib/kognitos/client-core";
 import {
   isKognitosFileDownloadConfigured,
-  resolveInvoicePdfFileIdFromRun,
+  listInvoicePdfFileIdCandidatesFromRun,
   type RunInputFileRow,
 } from "@/lib/kognitos/resolve-invoice-pdf-file-id";
 import { supabaseAdmin } from "@/lib/supabase";
+
+/** Large PDFs from Kognitos; allow time for upstream + buffering on Vercel. */
+export const maxDuration = 60;
 
 export async function GET(
   _request: Request,
@@ -68,27 +71,30 @@ export async function GET(
     };
   });
 
-  const fileId = resolveInvoicePdfFileIdFromRun(payload, rows);
-  if (!fileId) {
+  const fileIds = listInvoicePdfFileIdCandidatesFromRun(payload, rows);
+  if (fileIds.length === 0) {
     return NextResponse.json({ error: "invoice_pdf_not_found" }, { status: 404 });
   }
 
-  try {
-    const upstream = await downloadOrganizationFile(fileId);
-    if (!upstream.body) {
-      return NextResponse.json(
-        { error: "empty_response_body" },
-        { status: 502 },
-      );
+  let lastError = "download_failed";
+  for (const fileId of fileIds) {
+    try {
+      const upstream = await downloadOrganizationFile(fileId);
+      const buf = await upstream.arrayBuffer();
+      if (buf.byteLength === 0) {
+        lastError = "empty_response_body";
+        continue;
+      }
+      const headers = new Headers();
+      const ct = upstream.headers.get("content-type");
+      headers.set("Content-Type", ct && ct.trim() ? ct : "application/pdf");
+      headers.set("Content-Disposition", 'inline; filename="invoice.pdf"');
+      headers.set("Cache-Control", "private, max-age=120");
+      return new NextResponse(buf, { status: 200, headers });
+    } catch (e) {
+      lastError = e instanceof Error ? e.message : "download_failed";
     }
-    const headers = new Headers();
-    const ct = upstream.headers.get("content-type");
-    headers.set("Content-Type", ct && ct.trim() ? ct : "application/pdf");
-    headers.set("Content-Disposition", 'inline; filename="invoice.pdf"');
-    headers.set("Cache-Control", "private, max-age=120");
-    return new NextResponse(upstream.body, { status: 200, headers });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "download_failed";
-    return NextResponse.json({ error: msg }, { status: 502 });
   }
+
+  return NextResponse.json({ error: lastError }, { status: 502 });
 }

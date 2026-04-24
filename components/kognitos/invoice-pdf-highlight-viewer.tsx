@@ -716,7 +716,7 @@ function ExtractedFieldsReviewPanel({
                     )}
                     onPointerEnter={() => onRowPointerEnter(h.id)}
                     onPointerLeave={() => onRowPointerLeave(h.id)}
-                    onClick={() => onRowActivate(h.id)}
+                    onClickCapture={() => onRowActivate(h.id)}
                   >
                     <div className="flex items-center gap-2 pr-0.5">
                       <Type
@@ -942,6 +942,9 @@ export function InvoicePdfHighlightViewer({ pdfUrl, runId }: Props) {
 
   const byPage = (n: number) => parsedHighlights.filter((h) => h.pageNumber === n);
 
+  const parsedHighlightsRef = useRef<IdPdfFieldHighlight[]>([]);
+  parsedHighlightsRef.current = parsedHighlights;
+
   const sortedFields = useMemo(
     () =>
       [...parsedHighlights].sort(
@@ -968,14 +971,11 @@ export function InvoicePdfHighlightViewer({ pdfUrl, runId }: Props) {
     setLinkedHoverFieldId((cur) => (cur === id ? null : cur));
   }, []);
 
-  const onHighlightLinkActivate = useCallback(
-    (id: string) => {
-      const h = parsedHighlights.find((x) => x.id === id);
-      if (h) setActivePage(h.pageNumber);
-      setFocusedFieldId(id);
-    },
-    [parsedHighlights],
-  );
+  const onHighlightLinkActivate = useCallback((id: string) => {
+    const h = parsedHighlightsRef.current.find((x) => x.id === id);
+    if (h) setActivePage(h.pageNumber);
+    setFocusedFieldId(id);
+  }, []);
 
   useEffect(() => {
     if (!focusedFieldId) return;
@@ -991,12 +991,21 @@ export function InvoicePdfHighlightViewer({ pdfUrl, runId }: Props) {
     if (!focusedFieldId || !workspaceRef.current) return;
     const h = parsedHighlights.find((x) => x.id === focusedFieldId);
     if (!h || h.pageNumber !== activePage) return;
-    const raf = requestAnimationFrame(() => {
-      workspaceRef.current
-        ?.querySelector(`[data-field-highlight-id="${CSS.escape(focusedFieldId)}"]`)
-        ?.scrollIntoView({ block: "center", behavior: "smooth", inline: "nearest" });
+    let cancelled = false;
+    let innerRaf = 0;
+    const outerRaf = requestAnimationFrame(() => {
+      innerRaf = requestAnimationFrame(() => {
+        if (cancelled) return;
+        workspaceRef.current
+          ?.querySelector(`[data-field-highlight-id="${CSS.escape(focusedFieldId)}"]`)
+          ?.scrollIntoView({ block: "center", behavior: "smooth", inline: "nearest" });
+      });
     });
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(outerRaf);
+      cancelAnimationFrame(innerRaf);
+    };
   }, [focusedFieldId, activePage, parsedHighlights]);
 
   const handleDownloadPdf = useCallback(async () => {

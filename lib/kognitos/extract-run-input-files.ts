@@ -75,25 +75,6 @@ function walkInputsMap(map: unknown, out: ExtractedFileRef[]): void {
   }
 }
 
-/**
- * Collect file references from user inputs and executable step inputs.
- * Prefer rows where `remote` is set for download via Kognitos Files API.
- */
-export function extractFileRefsFromKognitosPayload(
-  payload: Record<string, unknown>,
-): ExtractedFileRef[] {
-  const out: ExtractedFileRef[] = [];
-
-  walkInputsMap(payload.userInputs ?? payload.user_inputs, out);
-
-  const steps =
-    payload.executableSteps ?? payload.executable_steps ?? payload.executableSteps;
-  const srec = getRecord(steps);
-  if (srec?.inputs) walkInputsMap(srec.inputs, out);
-
-  return out;
-}
-
 const INVOICE_DOCUMENT_KEY_NORMALIZED = "invoice document";
 
 function normalizeUserInputKeyForCompare(key: string): string {
@@ -106,6 +87,7 @@ function normalizeUserInputKeyForCompare(key: string): string {
     .trim();
 }
 
+/** Every payload map that can hold `userInputs`-shaped file refs (must stay aligned with `payloadHasInvoiceDocumentUserInput`). */
 function userInputMapsToScan(payload: Record<string, unknown>): unknown[] {
   const maps: unknown[] = [
     payload.userInputs,
@@ -117,6 +99,30 @@ function userInputMapsToScan(payload: Record<string, unknown>): unknown[] {
     maps.push(ir.userInputs, ir.user_inputs);
   }
   return maps;
+}
+
+/**
+ * Collect file references from user inputs and executable step inputs.
+ * Prefer rows where `remote` is set for download via Kognitos Files API.
+ * Includes `invocationDetails` / `invocation_details` user input maps so
+ * `kognitos_run_inputs` reindexing and invoice PDF resolution match runs where
+ * the invoice file only appears under invocation metadata.
+ */
+export function extractFileRefsFromKognitosPayload(
+  payload: Record<string, unknown>,
+): ExtractedFileRef[] {
+  const out: ExtractedFileRef[] = [];
+
+  for (const ui of userInputMapsToScan(payload)) {
+    walkInputsMap(ui, out);
+  }
+
+  const steps =
+    payload.executableSteps ?? payload.executable_steps ?? payload.executableSteps;
+  const srec = getRecord(steps);
+  if (srec?.inputs) walkInputsMap(srec.inputs, out);
+
+  return out;
 }
 
 /**

@@ -25,15 +25,25 @@ function scoreInputRow(r: RunInputFileRow): number {
   return s;
 }
 
+function pushUniqueId(out: string[], seen: Set<string>, rawId: string): void {
+  const id = rawId.trim();
+  if (!id || /^https?:\/\//i.test(id)) return;
+  if (seen.has(id)) return;
+  seen.add(id);
+  out.push(id);
+}
+
 /**
- * Pick a Kognitos org file id suitable for downloading the invoice PDF for a run.
- * Prefers indexed `kognitos_run_inputs` rows (PDF name + invoice-ish input keys),
- * then file refs embedded in the raw `payload`.
+ * Ordered Kognitos org file ids to try for the invoice PDF (best first).
+ * Same ordering rules as the former single-id resolver; download may try fallbacks.
  */
-export function resolveInvoicePdfFileIdFromRun(
+export function listInvoicePdfFileIdCandidatesFromRun(
   payload: Record<string, unknown>,
   inputRows: RunInputFileRow[],
-): string | null {
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+
   const rows = inputRows.filter((r) => {
     const id = (r.kognitos_file_id ?? "").trim();
     return Boolean(id) && !/^https?:\/\//i.test(id);
@@ -43,7 +53,9 @@ export function resolveInvoicePdfFileIdFromRun(
       .map((r) => ({ r, s: scoreInputRow(r) }))
       .filter((x) => x.s >= 0)
       .sort((a, b) => b.s - a.s || a.r.input_key.localeCompare(b.r.input_key));
-    if (scored.length > 0) return scored[0]!.r.kognitos_file_id.trim();
+    for (const { r } of scored) {
+      pushUniqueId(out, seen, r.kognitos_file_id);
+    }
   }
 
   const refs = extractFileRefsFromKognitosPayload(payload);
@@ -52,14 +64,31 @@ export function resolveInvoicePdfFileIdFromRun(
     const fid = normalizeKognitosFileIdForDownload(ref.remote);
     if (!fid || /^https?:\/\//i.test(fid)) continue;
     const fn = ref.inlineFileName ?? "";
-    if (PDF_NAME.test(fn) || INVOICE_HINT.test(ref.inputKey)) return fid;
+    if (PDF_NAME.test(fn) || INVOICE_HINT.test(ref.inputKey)) {
+      pushUniqueId(out, seen, fid);
+    }
   }
   for (const ref of refs) {
     if (!ref.remote || /^https?:\/\//i.test(ref.remote)) continue;
     const fid = normalizeKognitosFileIdForDownload(ref.remote);
-    if (fid && !/^https?:\/\//i.test(fid)) return fid;
+    if (fid && !/^https?:\/\//i.test(fid)) {
+      pushUniqueId(out, seen, fid);
+    }
   }
-  return null;
+  return out;
+}
+
+/**
+ * Pick a Kognitos org file id suitable for downloading the invoice PDF for a run.
+ * Prefers indexed `kognitos_run_inputs` rows (PDF name + invoice-ish input keys),
+ * then file refs embedded in the raw `payload`.
+ */
+export function resolveInvoicePdfFileIdFromRun(
+  payload: Record<string, unknown>,
+  inputRows: RunInputFileRow[],
+): string | null {
+  const ids = listInvoicePdfFileIdCandidatesFromRun(payload, inputRows);
+  return ids[0] ?? null;
 }
 
 export function isKognitosFileDownloadConfigured(): boolean {
