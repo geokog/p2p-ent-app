@@ -1,5 +1,3 @@
-import "server-only";
-
 import type {
   KognitosInsights,
   KognitosMetricResult,
@@ -40,9 +38,11 @@ export function resolveAutomationId(explicit?: string): string {
 }
 
 function authHeader(): string {
-  const token = process.env.KOGNITOS_API_KEY || process.env.KOGNITOS_PAT;
+  // Prefer PAT when both are set — matches Kognitos REST docs and operator flows (e.g. exception agent CreateEvent).
+  const token =
+    process.env.KOGNITOS_PAT?.trim() || process.env.KOGNITOS_API_KEY?.trim();
   if (!token) {
-    throw new Error("Set KOGNITOS_API_KEY or KOGNITOS_PAT");
+    throw new Error("Set KOGNITOS_PAT or KOGNITOS_API_KEY");
   }
   return `Bearer ${token}`;
 }
@@ -53,7 +53,24 @@ function baseUrl(): string {
   return u;
 }
 
-async function kognitosFetchJson<T>(
+/** Non-2xx from `kognitosFetchJson` — callers can branch on {@link KognitosApiError.status}. */
+export class KognitosApiError extends Error {
+  readonly status: number;
+  readonly path: string;
+  readonly bodySnippet: string;
+
+  constructor(status: number, path: string, text: string) {
+    const bodySnippet = text.slice(0, 800);
+    super(`Kognitos API ${status} ${path}: ${bodySnippet}`);
+    this.status = status;
+    this.path = path;
+    this.bodySnippet = bodySnippet;
+    this.name = "KognitosApiError";
+  }
+}
+
+/** Workspace JSON calls (Bearer PAT). Used by feature adapters (e.g. exceptions). */
+export async function kognitosFetchJson<T>(
   path: string,
   init?: RequestInit,
 ): Promise<T> {
@@ -68,9 +85,7 @@ async function kognitosFetchJson<T>(
   });
   const text = await res.text();
   if (!res.ok) {
-    throw new Error(
-      `Kognitos API ${res.status} ${path}: ${text.slice(0, 800)}`,
-    );
+    throw new KognitosApiError(res.status, path, text);
   }
   return (text ? JSON.parse(text) : {}) as T;
 }
@@ -475,23 +490,164 @@ export async function getTotalRunsByAutomationShortId(): Promise<
 }
 
 /**
- * Stream a file from Kognitos org Files API (binary). Caller must not forward credentials to the client.
+ * POST `files/{file}:generateDownloadUrl` — returns a time-limited URI for direct
+ * client display (OpenAPI `GenerateDownloadUrl`). Prefer over proxying bytes when
+ * embedding or opening the run’s document.
  */
-export async function downloadOrganizationFile(fileId: string): Promise<Response> {
+export async function generateOrganizationFileDownloadUrl(
+  fileId: string,
+  options?: { expireDuration?: string },
+): Promise<string> {
   const org = requireOrg();
   const enc = encodeURIComponent(fileId);
-  const path = `/api/v1/organizations/${encodeURIComponent(org)}/files/${enc}:download`;
-  const res = await fetch(`${baseUrl()}${path}`, {
+  const path = `/api/v1/organizations/${encodeURIComponent(org)}/files/${enc}:generateDownloadUrl`;
+  // #region agent log
+  fetch("http://127.0.0.1:7804/ingest/2ccf0569-63ad-4f5f-a128-4a22a784bde3", {
+    method: "POST",
     headers: {
-      Authorization: authHeader(),
-      Accept: "*/*",
+      "Content-Type": "application/json",
+      "X-Debug-Session-Id": "b999a8",
     },
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(
-      `Kognitos download ${res.status} ${path}: ${text.slice(0, 800)}`,
-    );
+    body: JSON.stringify({
+      sessionId: "b999a8",
+      runId: "pre-fix",
+      hypothesisId: "H2",
+      location: "client-core.ts:generateOrganizationFileDownloadUrl",
+      message: "calling generateDownloadUrl",
+      data: {
+        fileIdLen: fileId.length,
+        encLen: enc.length,
+        pathTail: path.slice(-96),
+        encHasEncodedColon: enc.includes("%3A"),
+      },
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+  // #endregion
+  const body: Record<string, unknown> = {};
+  if (options?.expireDuration?.trim()) {
+    body.expire_duration = options.expireDuration.trim();
   }
-  return res;
+  let raw: Record<string, unknown>;
+  try {
+    raw = await kognitosFetchJson<Record<string, unknown>>(path, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    // #region agent log
+    const err = e instanceof KognitosApiError ? e : null;
+    fetch("http://127.0.0.1:7804/ingest/2ccf0569-63ad-4f5f-a128-4a22a784bde3", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Debug-Session-Id": "b999a8",
+      },
+      body: JSON.stringify({
+        sessionId: "b999a8",
+        runId: "pre-fix",
+        hypothesisId: "H4",
+        location: "client-core.ts:generateOrganizationFileDownloadUrl:err",
+        message: "generateDownloadUrl API error",
+        data: {
+          status: err?.status ?? null,
+          pathTail: err?.path?.slice(-96) ?? null,
+          bodySnippet: err?.bodySnippet?.slice(0, 400) ?? String(e).slice(0, 400),
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion
+    throw e;
+  }
+  const uri =
+    (typeof raw.download_uri === "string" && raw.download_uri.trim()) ||
+    (typeof raw.downloadUri === "string" && raw.downloadUri.trim()) ||
+    "";
+  if (!uri) {
+    throw new Error("Kognitos generateDownloadUrl: missing download_uri in response");
+  }
+  return uri;
+}
+
+function logKognitosFileDownloadNotOk(
+  status: number,
+  path: string,
+  fileId: string,
+  text: string,
+): void {
+  // #region agent log
+  fetch("http://127.0.0.1:7804/ingest/2ccf0569-63ad-4f5f-a128-4a22a784bde3", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Debug-Session-Id": "b999a8",
+    },
+    body: JSON.stringify({
+      sessionId: "b999a8",
+      hypothesisId: "H1",
+      location: "client-core.ts:downloadOrganizationFile",
+      message: "kognitos_files_download_not_ok",
+      data: {
+        status,
+        path,
+        fileIdPrefix: fileId.slice(0, 16),
+        bodyPreview: text.slice(0, 240),
+      },
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+  // #endregion
+}
+
+export type DownloadOrganizationFileOptions = {
+  /** When org-level `…/files/{id}:download` returns 404, retry under this workspace. Defaults to `KOGNITOS_WORKSPACE_ID`. */
+  workspaceId?: string;
+};
+
+/**
+ * Stream a file from Kognitos Files API (binary). Caller must not forward credentials to the client.
+ * Uses org-level download first; on **404** only, retries with `…/workspaces/{workspaceId}/files/…:download`
+ * when a workspace id is available ({@link DownloadOrganizationFileOptions.workspaceId} or env).
+ */
+export async function downloadOrganizationFile(
+  fileId: string,
+  options?: DownloadOrganizationFileOptions,
+): Promise<Response> {
+  const org = requireOrg();
+  const enc = encodeURIComponent(fileId);
+  const orgPath = `/api/v1/organizations/${encodeURIComponent(org)}/files/${enc}:download`;
+  const headers = {
+    Authorization: authHeader(),
+    Accept: "*/*",
+  } as const;
+  const urlBase = baseUrl();
+
+  const res = await fetch(`${urlBase}${orgPath}`, { headers });
+  if (res.ok) return res;
+
+  const text = await res.text();
+
+  if (res.status === 404) {
+    const ws =
+      options?.workspaceId?.trim() ||
+      process.env.KOGNITOS_WORKSPACE_ID?.trim() ||
+      "";
+    if (ws) {
+      logKognitosFileDownloadNotOk(res.status, orgPath, fileId, text);
+      const wsPath = `/api/v1/organizations/${encodeURIComponent(org)}/workspaces/${encodeURIComponent(ws)}/files/${enc}:download`;
+      const resWs = await fetch(`${urlBase}${wsPath}`, { headers });
+      if (resWs.ok) return resWs;
+      const textWs = await resWs.text();
+      logKognitosFileDownloadNotOk(resWs.status, wsPath, fileId, textWs);
+      throw new Error(
+        `Kognitos download ${resWs.status} ${wsPath}: ${textWs.slice(0, 800)}`,
+      );
+    }
+  }
+
+  logKognitosFileDownloadNotOk(res.status, orgPath, fileId, text);
+  throw new Error(
+    `Kognitos download ${res.status} ${orgPath}: ${text.slice(0, 800)}`,
+  );
 }

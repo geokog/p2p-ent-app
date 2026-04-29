@@ -1,5 +1,3 @@
-import "server-only";
-
 import { supabaseAdmin } from "@/lib/supabase";
 import { getRunRaw } from "./client-core";
 import { getRunTimesFromPayload } from "./run-payload";

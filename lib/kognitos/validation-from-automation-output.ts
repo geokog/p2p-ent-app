@@ -22,8 +22,11 @@ function runStateObject(
   return st as Record<string, unknown>;
 }
 
-/** Same merge as `getMergedOutputsForPaymentText` in `normalize-dashboard-run` (avoid import cycle). */
-function mergedOutputsFromPayload(
+/**
+ * Top-level `outputs` merged with `state.completed.outputs` (completed wins).
+ * Same merge as `getMergedOutputsForPaymentText` in `normalize-dashboard-run`.
+ */
+export function mergeKognitosRunOutputLayers(
   payload: Record<string, unknown>,
 ): Record<string, unknown> {
   const completed = runStateObject(payload)?.completed as
@@ -804,7 +807,7 @@ function gatherMarkdownTextsForValidationScan(
     acc.push(t);
   };
 
-  push(markdownReportTextFromOutputs(mergedOutputsFromPayload(payload)));
+  push(markdownReportTextFromOutputs(mergeKognitosRunOutputLayers(payload)));
 
   const budget = { n: 0 };
   const visit = (node: unknown, depth: number) => {

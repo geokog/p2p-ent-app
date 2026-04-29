@@ -12,6 +12,8 @@ import {
   Truck,
   LifeBuoy,
   Layers,
+  AlertTriangle,
+  FlaskConical,
   Menu,
   ChevronLeft,
   ChevronRight,
@@ -19,7 +21,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth-context";
-import { DOMAIN, getRoleConfig } from "@/lib/domain.config";
+import { DOMAIN, getRoleConfig, type NavItem } from "@/lib/domain.config";
 import { canAccessPath } from "@/lib/role-permissions";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -47,6 +49,8 @@ const ICON_MAP: Record<string, LucideIcon> = {
   Truck,
   LifeBuoy,
   Layers,
+  AlertTriangle,
+  FlaskConical,
 };
 
 const LogoIcon = ICON_MAP[DOMAIN.appLogo] ?? Layers;
@@ -81,6 +85,15 @@ function SidebarNav({ collapsed = false, onToggleCollapsed }: SidebarNavProps) {
     if (user && !canAccessPath(user.role, item.href)) return false;
     return true;
   });
+
+  function visibleChildItems(children: NavItem[] | undefined): NavItem[] {
+    if (!children?.length) return [];
+    return children.filter((child) => {
+      if (child.roles && user && !child.roles.includes(user.role)) return false;
+      if (user && !canAccessPath(user.role, child.href)) return false;
+      return true;
+    });
+  }
 
   const roleConfig = user ? getRoleConfig(user.role) : undefined;
   const railCollapsed = Boolean(onToggleCollapsed && collapsed);
@@ -156,34 +169,99 @@ function SidebarNav({ collapsed = false, onToggleCollapsed }: SidebarNavProps) {
         >
           {visibleItems.map((item) => {
             const Icon = ICON_MAP[item.icon] ?? Layers;
-            const active = isActive(pathname, item.href);
-            const link = (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={cn(
-                  "flex items-center rounded-md py-2 text-sm font-medium transition-colors",
-                  railCollapsed
-                    ? "justify-center px-0"
-                    : "gap-3 px-3",
-                  active
-                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                    : "text-sidebar-muted hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground",
-                )}
-              >
+            const sub = visibleChildItems(item.children);
+            const hasSub = sub.length > 0;
+            const parentPathActive = isActive(pathname, item.href);
+            const anyChildActive = sub.some((c) => isActive(pathname, c.href));
+            const parentLooksActive = parentPathActive || anyChildActive;
+
+            const parentClassName = cn(
+              "flex items-center rounded-md py-2 text-sm font-medium transition-colors",
+              railCollapsed ? "justify-center px-0" : "gap-3 px-3",
+              parentLooksActive
+                ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                : "text-sidebar-muted hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground",
+            );
+
+            const parentLink = (
+              <Link href={item.href} className={parentClassName}>
                 <Icon className="size-[18px] shrink-0" />
                 {!railCollapsed ? item.label : null}
               </Link>
             );
 
-            if (!railCollapsed) return link;
+            if (!hasSub) {
+              if (!railCollapsed) {
+                return (
+                  <div key={item.href}>{parentLink}</div>
+                );
+              }
+              return (
+                <Tooltip key={item.href}>
+                  <TooltipTrigger asChild>{parentLink}</TooltipTrigger>
+                  <TooltipContent side="right">{item.label}</TooltipContent>
+                </Tooltip>
+              );
+            }
 
-            return (
-              <Tooltip key={item.href}>
-                <TooltipTrigger asChild>{link}</TooltipTrigger>
-                <TooltipContent side="right">{item.label}</TooltipContent>
-              </Tooltip>
+            const group = !railCollapsed ? (
+              <div key={item.href} className="space-y-0.5">
+                {parentLink}
+                <div className="ml-3 space-y-0.5 border-l border-sidebar-border pl-2">
+                  {sub.map((child) => {
+                    const ChildIcon = ICON_MAP[child.icon] ?? Layers;
+                    const cActive = isActive(pathname, child.href);
+                    return (
+                      <Link
+                        key={child.href}
+                        href={child.href}
+                        className={cn(
+                          "flex items-center gap-3 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                          cActive
+                            ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                            : "text-sidebar-muted hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground",
+                        )}
+                      >
+                        <ChildIcon className="size-[18px] shrink-0" />
+                        {child.label}
+                      </Link>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+              <div key={item.href} className="flex flex-col gap-0.5">
+                <Tooltip>
+                  <TooltipTrigger asChild>{parentLink}</TooltipTrigger>
+                  <TooltipContent side="right">{item.label}</TooltipContent>
+                </Tooltip>
+                {sub.map((child) => {
+                  const ChildIcon = ICON_MAP[child.icon] ?? Layers;
+                  const cActive = isActive(pathname, child.href);
+                  const childLink = (
+                    <Link
+                      href={child.href}
+                      className={cn(
+                        "flex items-center justify-center rounded-md py-2 text-sm font-medium transition-colors",
+                        cActive
+                          ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                          : "text-sidebar-muted hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground",
+                      )}
+                    >
+                      <ChildIcon className="size-[18px] shrink-0" />
+                    </Link>
+                  );
+                  return (
+                    <Tooltip key={child.href}>
+                      <TooltipTrigger asChild>{childLink}</TooltipTrigger>
+                      <TooltipContent side="right">{child.label}</TooltipContent>
+                    </Tooltip>
+                  );
+                })}
+              </div>
             );
+
+            return group;
           })}
         </nav>
 

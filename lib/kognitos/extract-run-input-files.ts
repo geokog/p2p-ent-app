@@ -16,13 +16,93 @@ function getRecord(obj: unknown): Record<string, unknown> | null {
   return obj as Record<string, unknown>;
 }
 
+/** Protobuf-JSON scalars often wrap strings (e.g. `file.remote` under invocation metadata). */
+function stringFromJsonScalar(v: unknown): string | undefined {
+  if (typeof v === "string") {
+    const t = v.trim();
+    return t || undefined;
+  }
+  if (typeof v === "number" && Number.isFinite(v)) return String(v);
+  if (!v || typeof v !== "object" || Array.isArray(v)) return undefined;
+  const o = v as Record<string, unknown>;
+  if (typeof o.stringValue === "string" && o.stringValue.trim()) {
+    return o.stringValue.trim();
+  }
+  if (typeof o.string_value === "string" && o.string_value.trim()) {
+    return o.string_value.trim();
+  }
+  if (typeof o.text === "string" && o.text.trim()) return o.text.trim();
+  return undefined;
+}
+
+function tryFlattenEntriesMap(rec: Record<string, unknown>): Record<
+  string,
+  unknown
+> | null {
+  const entries = rec.entries;
+  if (!Array.isArray(entries)) return null;
+  const out: Record<string, unknown> = {};
+  for (const e of entries) {
+    const ent = getRecord(e);
+    if (!ent) continue;
+    const keyText =
+      (typeof ent.key === "string" && ent.key.trim()) ||
+      stringFromJsonScalar(ent.key);
+    if (!keyText) continue;
+    out[keyText] = ent.value;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+/**
+ * Normalize API `userInputs` / `user_inputs` nodes: plain maps, protobuf `entries` rows,
+ * or an array of `{ key|name, value|input_value }` (seen under invocation metadata).
+ */
+function resolveUserInputsKeyValueMap(raw: unknown): Record<string, unknown> | null {
+  if (raw == null) return null;
+  if (Array.isArray(raw)) {
+    const out: Record<string, unknown> = {};
+    for (const item of raw) {
+      const row = getRecord(item);
+      if (!row) continue;
+      const keyText =
+        (typeof row.key === "string" && row.key.trim()) ||
+        stringFromJsonScalar(row.key) ||
+        (typeof row.name === "string" && row.name.trim()) ||
+        stringFromJsonScalar(row.name) ||
+        (typeof row.input_key === "string" && row.input_key.trim()) ||
+        (typeof row.inputKey === "string" && row.inputKey.trim());
+      if (!keyText) continue;
+      const val =
+        row.value ??
+        row.input_value ??
+        row.inputValue;
+      if (val === undefined) continue;
+      out[keyText] = val;
+    }
+    return Object.keys(out).length > 0 ? out : null;
+  }
+  const rec = getRecord(raw);
+  if (!rec) return null;
+  const fromEntries = tryFlattenEntriesMap(rec);
+  if (!fromEntries) return rec;
+  const merged: Record<string, unknown> = { ...fromEntries };
+  for (const [k, v] of Object.entries(rec)) {
+    if (k === "entries") continue;
+    if (!(k in merged)) merged[k] = v;
+  }
+  return merged;
+}
+
 function fileValueFromCommonV1(
   val: Record<string, unknown>,
 ): { remote?: string; inline?: Record<string, unknown> } | null {
   const file = val.file;
   if (!file || typeof file !== "object" || Array.isArray(file)) return null;
   const fv = file as Record<string, unknown>;
-  const remote = typeof fv.remote === "string" ? fv.remote.trim() : undefined;
+  const remote =
+    (typeof fv.remote === "string" ? fv.remote.trim() : undefined) ||
+    stringFromJsonScalar(fv.remote);
   const inline =
     fv.inline && typeof fv.inline === "object" && !Array.isArray(fv.inline)
       ? (fv.inline as Record<string, unknown>)
@@ -68,7 +148,7 @@ function extractFromInputValue(
 }
 
 function walkInputsMap(map: unknown, out: ExtractedFileRef[]): void {
-  const rec = getRecord(map);
+  const rec = resolveUserInputsKeyValueMap(map);
   if (!rec) return;
   for (const [key, v] of Object.entries(rec)) {
     extractFromInputValue(key, v, out);
@@ -153,8 +233,9 @@ export function payloadHasInvoiceDocumentUserInput(
     normalizeUserInputKeyForCompare(key) === INVOICE_DOCUMENT_KEY_NORMALIZED;
 
   for (const ui of userInputMapsToScan(payload)) {
-    if (!ui || typeof ui !== "object" || Array.isArray(ui)) continue;
-    for (const key of Object.keys(ui as Record<string, unknown>)) {
+    const rec = resolveUserInputsKeyValueMap(ui);
+    if (!rec) continue;
+    for (const key of Object.keys(rec)) {
       if (checkKey(key)) return true;
     }
   }
@@ -189,4 +270,38 @@ export function normalizeKognitosFileIdForDownload(remote: string): string {
     return t.slice(slashFiles + "/files/".length).replace(/^\/+/, "");
   }
   return t;
+}
+
+/**
+ * Kognitos `file.remote` / stored `kognitos_file_id` may include a display suffix
+ * `"{resourceId}--{filename}.pdf"`. The org Files `:download` RPC expects
+ * `{resourceId}` — try the full value first, then the segment before `--` when
+ * the string looks like that pattern.
+ */
+export function kognitosFileDownloadIdVariants(fileId: string): string[] {
+  const t = fileId.trim();
+  if (!t) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (s: string) => {
+    const x = s.trim();
+    if (!x || seen.has(x)) return;
+    seen.add(x);
+    out.push(x);
+  };
+  push(t);
+  const i = t.indexOf("--");
+  if (i > 0 && /\.pdf$/i.test(t)) {
+    const beforeDd = t.slice(0, i);
+    push(beforeDd);
+    const lastUnd = beforeDd.lastIndexOf("_");
+    if (lastUnd > 0) {
+      const left = beforeDd.slice(0, lastUnd);
+      const right = beforeDd.slice(lastUnd + 1);
+      if (left.length >= 4 && right.length > 0 && right.length <= 8) {
+        push(left);
+      }
+    }
+  }
+  return out;
 }

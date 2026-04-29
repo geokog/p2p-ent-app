@@ -547,7 +547,7 @@ export function KognitosRunsAnalyzedTable({
                                   >
                                     <RefreshCw className="size-3.5" />
                                   </span>
-                                  <div className="min-w-0 flex-1 overflow-hidden pt-0.5">
+                                  <div className="min-w-0 flex-1 space-y-0.5 overflow-hidden pt-0.5">
                                     {vendorHref ? (
                                       <Link
                                         href={vendorHref}
@@ -567,6 +567,12 @@ export function KognitosRunsAnalyzedTable({
                                         {row.vendor}
                                       </span>
                                     )}
+                                    <p
+                                      className="truncate text-xs tabular-nums leading-snug text-muted-foreground"
+                                      title={row.id}
+                                    >
+                                      Run ID · {row.id}
+                                    </p>
                                   </div>
                                 </div>
                               </TableCell>

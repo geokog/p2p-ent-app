@@ -33,6 +33,8 @@ export interface NavItem {
   href: string;
   icon: string; // Lucide icon name
   roles?: string[]; // if set, only these roles see it; omit for all
+  /** Indented links shown under this item (e.g. Worklist → Test). */
+  children?: NavItem[];
 }
 
 export const DOMAIN = {
@@ -73,9 +75,11 @@ export const DOMAIN = {
       defaultPath: "/",
       allowedPaths: [
         "/",
+        "/worklist",
         "/requests",
         "/vendors",
         "/expert-queue",
+        "/exception-handling",
         "/logistics",
         "/notifications",
         "/setup-pending",
@@ -88,9 +92,11 @@ export const DOMAIN = {
       defaultPath: "/",
       allowedPaths: [
         "/",
+        "/worklist",
         "/requests",
         "/vendors",
         "/expert-queue",
+        "/exception-handling",
         "/logistics",
         "/rules",
         "/notifications",
@@ -105,8 +111,10 @@ export const DOMAIN = {
       allowedPaths: [
         "/",
         "/dashboard",
+        "/worklist",
         "/vendors",
         "/expert-queue",
+        "/exception-handling",
         "/logistics",
         "/rules",
         "/notifications",
@@ -128,10 +136,22 @@ export const DOMAIN = {
   navItems: [
     { label: "Dashboard", href: "/dashboard", icon: "BarChart3" },
     { label: "Expert Queue", href: "/expert-queue", icon: "LifeBuoy" },
+    {
+      label: "Exceptions",
+      href: "/exception-handling",
+      icon: "AlertTriangle",
+    },
     { label: "Vendors", href: "/vendors", icon: "Store" },
     { label: "Logistics", href: "/logistics", icon: "Truck" },
     { label: "Rules", href: "/rules", icon: "BookOpen" },
-    { label: "Worklist", href: "/", icon: "ClipboardList" },
+    {
+      label: "Worklist",
+      href: "/",
+      icon: "ClipboardList",
+      children: [
+        { label: "Test", href: "/worklist/test", icon: "FlaskConical" },
+      ],
+    },
     { label: "Notifications", href: "/notifications", icon: "Bell" },
     { label: "Settings", href: "/settings", icon: "Settings", roles: ["admin", "manager"] },
   ] satisfies NavItem[],
