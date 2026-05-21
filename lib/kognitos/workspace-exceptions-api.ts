@@ -28,6 +28,83 @@ function requireWorkspace(): string {
   return id;
 }
 
+const IS_DEV_KOGNITOS_AUTH_LOG = process.env.NODE_ENV === "development";
+
+/**
+ * GETs under `…/automations/{auto}/runs/{run}/…` often 403 with a user PAT while the same
+ * org's workspace exception GET works. When PAT and API key are both set and differ, try
+ * **API key first**, then PAT on 403. Otherwise delegate to {@link kognitosFetchJsonWithPat403Retry}
+ * (PAT preferred, then API key on 403 when secrets differ).
+ */
+async function kognitosJsonAutomationScopedGet<T>(
+  path: string,
+  init?: RequestInit,
+): Promise<T> {
+  const pat = process.env.KOGNITOS_PAT?.trim();
+  const apiKey = process.env.KOGNITOS_API_KEY?.trim();
+
+  if (IS_DEV_KOGNITOS_AUTH_LOG) {
+    const redacted = path.replace(
+      /^(\/api\/v1\/organizations\/)[^/]+(\/workspaces\/)[^/]+/,
+      "$1{org}$2{ws}",
+    );
+    console.log(
+      "[kognitos][dev][automation-scoped GET]",
+      JSON.stringify(
+        {
+          pathRedacted: redacted,
+          patConfigured: Boolean(pat),
+          apiKeyConfigured: Boolean(apiKey),
+          secretsAreDistinct: Boolean(pat && apiKey && pat !== apiKey),
+        },
+        null,
+        2,
+      ),
+    );
+  }
+
+  if (pat && apiKey && pat !== apiKey) {
+    if (IS_DEV_KOGNITOS_AUTH_LOG) {
+      console.log(
+        "[kognitos][dev][automation-scoped GET] attempt 1: credentialType=API_KEY",
+      );
+    }
+    try {
+      return await kognitosFetchJsonWithBearerToken<T>(path, apiKey, init);
+    } catch (e) {
+      if (e instanceof KognitosApiError && e.status === 403) {
+        if (IS_DEV_KOGNITOS_AUTH_LOG) {
+          console.log(
+            "[kognitos][dev][automation-scoped GET] attempt 1 returned 403; attempt 2: credentialType=PAT",
+          );
+        }
+        return await kognitosFetchJsonWithBearerToken<T>(path, pat, init);
+      }
+      throw e;
+    }
+  }
+
+  if (IS_DEV_KOGNITOS_AUTH_LOG) {
+    const primary = pat ? "PAT" : apiKey ? "API_KEY" : "none";
+    const note =
+      pat && apiKey && pat === apiKey
+        ? "PAT and API_KEY identical; Pat403Retry cannot swap; first attempt follows authHeader (PAT preferred)."
+        : "Only one of PAT/API_KEY set; Pat403Retry uses that secret only.";
+    console.log(
+      "[kognitos][dev][automation-scoped GET] using kognitosFetchJsonWithPat403Retry",
+      JSON.stringify(
+        {
+          primaryCredentialTypeFromAuthHeader: primary,
+          note,
+        },
+        null,
+        2,
+      ),
+    );
+  }
+  return kognitosFetchJsonWithPat403Retry<T>(path, init);
+}
+
 function agentIdFromListedEventItem(item: unknown): string | null {
   if (!item || typeof item !== "object") return null;
   const r = item as Record<string, unknown>;
@@ -39,6 +116,257 @@ function agentIdFromListedEventItem(item: unknown): string | null {
     }
   }
   return guessAgentIdFromJsonBlob(item, 8);
+}
+
+type ResolvedAgentId = {
+  agentId: string;
+  source: string;
+};
+
+function responseShape(raw: Record<string, unknown>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (Array.isArray(v)) {
+      out[k] = `array(${v.length})`;
+    } else if (v === null) {
+      out[k] = "null";
+    } else {
+      out[k] = typeof v;
+    }
+  }
+  return out;
+}
+
+async function resolveAgentIdForDocumentedListEvents(options: {
+  excRaw?: Record<string, unknown>;
+  automationId: string;
+  runId: string;
+}): Promise<ResolvedAgentId | null> {
+  if (options.excRaw) {
+    const fromResolver = agentIdFromExceptionResolverRaw(options.excRaw);
+    if (fromResolver) {
+      return { agentId: fromResolver, source: "exception.resolver" };
+    }
+
+    const fromExceptionBlob = guessAgentIdFromJsonBlob(options.excRaw, 8);
+    if (fromExceptionBlob) {
+      return {
+        agentId: fromExceptionBlob,
+        source: "exception raw JSON blob",
+      };
+    }
+  }
+
+  try {
+    const runRaw = await getRunRaw(options.runId, options.automationId);
+    if (runRaw) {
+      const fromRun = guessAgentIdFromJsonBlob(runRaw, 10);
+      if (fromRun) {
+        return { agentId: fromRun, source: "GET run raw JSON blob" };
+      }
+    }
+  } catch (e) {
+    if (IS_DEV_KOGNITOS_AUTH_LOG) {
+      console.error(
+        "[kognitos][dev][agent-scoped ListEvents diagnostic] getRunRaw agent probe failed",
+        JSON.stringify(
+          {
+            automationId: options.automationId,
+            runId: options.runId,
+            error: e instanceof Error ? e.message : String(e),
+          },
+          null,
+          2,
+        ),
+      );
+    }
+  }
+
+  try {
+    const org = requireOrg();
+    const ws = requireWorkspace();
+    const params = new URLSearchParams();
+    params.set("page_size", "100");
+    const path = `/api/v1/organizations/${encodeURIComponent(org)}/workspaces/${encodeURIComponent(ws)}/automations/${encodeURIComponent(options.automationId)}/runs/${encodeURIComponent(options.runId)}/events?${params}`;
+    const raw = await kognitosJsonAutomationScopedGet<Record<string, unknown>>(path);
+    const runEvents =
+      (raw.run_events as unknown[]) ??
+      (raw.runEvents as unknown[]) ??
+      [];
+    for (const item of runEvents) {
+      const aid = guessAgentIdFromJsonBlob(item, 10);
+      if (aid) {
+        return {
+          agentId: aid,
+          source: "ListRunEvents event JSON blob",
+        };
+      }
+    }
+  } catch (e) {
+    if (IS_DEV_KOGNITOS_AUTH_LOG) {
+      console.error(
+        "[kognitos][dev][agent-scoped ListEvents diagnostic] ListRunEvents agent probe failed",
+        JSON.stringify(
+          {
+            automationId: options.automationId,
+            runId: options.runId,
+            pathTemplate:
+              "GET …/automations/{automation_id}/runs/{run_id}/events?page_size=100",
+            error: e instanceof Error ? e.message : String(e),
+          },
+          null,
+          2,
+        ),
+      );
+    }
+  }
+
+  const configuredFallback = process.env.KOGNITOS_EXCEPTION_AGENT_ID?.trim();
+  if (configuredFallback) {
+    return {
+      agentId: configuredFallback,
+      source: "env.KOGNITOS_EXCEPTION_AGENT_ID fallback",
+    };
+  }
+
+  return null;
+}
+
+export async function listAgentScopedResolutionEvents(options: {
+  automationId: string;
+  runId: string;
+  exceptionIdShort: string;
+  excRaw?: Record<string, unknown>;
+  pageSize?: number;
+}): Promise<{
+  raw: Record<string, unknown>;
+  agentIdUsed: string;
+  agentIdSource: string;
+}> {
+  const org = requireOrg();
+  const ws = requireWorkspace();
+  const auto = options.automationId.trim();
+  const run = options.runId.trim();
+  if (!auto || !run) throw new Error("automationId and runId required");
+
+  const resolved = await resolveAgentIdForDocumentedListEvents({
+    excRaw: options.excRaw,
+    automationId: auto,
+    runId: run,
+  });
+  if (!resolved) {
+    throw new Error("agent_id_unresolved_for_list_events");
+  }
+
+  const pageSize = Math.min(Math.max(options.pageSize ?? 50, 1), 100);
+  const params = new URLSearchParams();
+  params.set("page_size", String(pageSize));
+  const path = `/api/v1/organizations/${encodeURIComponent(org)}/workspaces/${encodeURIComponent(ws)}/automations/${encodeURIComponent(auto)}/runs/${encodeURIComponent(run)}/agents/${encodeURIComponent(resolved.agentId)}/events?${params}`;
+  const raw = await kognitosJsonAutomationScopedGet<Record<string, unknown>>(path);
+  const ev = raw.events ?? raw.run_events ?? raw.runEvents;
+  const normalized =
+    Array.isArray(ev) && raw.events === undefined
+      ? { ...raw, events: ev }
+      : raw;
+  return {
+    raw: normalized as Record<string, unknown>,
+    agentIdUsed: resolved.agentId,
+    agentIdSource: resolved.source,
+  };
+}
+
+export async function devDiagnoseAgentScopedListEvents(options: {
+  exceptionId: string;
+  excRaw: Record<string, unknown>;
+  automationId: string;
+  runId: string;
+}): Promise<void> {
+  if (!IS_DEV_KOGNITOS_AUTH_LOG) return;
+
+  // Diagnostic-only: validate the documented OpenAPI ListEvents path with the known
+  // resolution agent id from the current environment. Do not use this for production
+  // reply routing or event reads.
+  const resolved = await resolveAgentIdForDocumentedListEvents({
+    excRaw: options.excRaw,
+    automationId: options.automationId,
+    runId: options.runId,
+  });
+
+  if (!resolved) {
+    console.log(
+      "[kognitos][dev][agent-scoped ListEvents diagnostic]",
+      JSON.stringify(
+        {
+          exceptionId: options.exceptionId,
+          automationId: options.automationId,
+          runId: options.runId,
+          resolvedAgentId: null,
+          agentIdSource: null,
+          attemptedDocumentedListEvents: false,
+          result: "skipped_no_agent_id",
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  const org = requireOrg();
+  const ws = requireWorkspace();
+  const params = new URLSearchParams();
+  params.set("page_size", "50");
+  const path = `/api/v1/organizations/${encodeURIComponent(org)}/workspaces/${encodeURIComponent(ws)}/automations/${encodeURIComponent(options.automationId)}/runs/${encodeURIComponent(options.runId)}/agents/${encodeURIComponent(resolved.agentId)}/events?${params}`;
+
+  try {
+    const raw = await kognitosJsonAutomationScopedGet<Record<string, unknown>>(path);
+    const events =
+      (raw.events as unknown[]) ??
+      (raw.run_events as unknown[]) ??
+      (raw.runEvents as unknown[]) ??
+      [];
+    console.log(
+      "[kognitos][dev][agent-scoped ListEvents diagnostic]",
+      JSON.stringify(
+        {
+          exceptionId: options.exceptionId,
+          automationId: options.automationId,
+          runId: options.runId,
+          resolvedAgentId: resolved.agentId,
+          agentIdSource: resolved.source,
+          pathTemplate:
+            "GET …/automations/{automation_id}/runs/{run_id}/agents/{agent_id}/events?page_size=50",
+          succeeded: true,
+          rawResponseShape: responseShape(raw),
+          topLevelKeys: Object.keys(raw),
+          eventCount: Array.isArray(events) ? events.length : 0,
+        },
+        null,
+        2,
+      ),
+    );
+  } catch (e) {
+    console.error(
+      "[kognitos][dev][agent-scoped ListEvents diagnostic]",
+      JSON.stringify(
+        {
+          exceptionId: options.exceptionId,
+          automationId: options.automationId,
+          runId: options.runId,
+          resolvedAgentId: resolved.agentId,
+          agentIdSource: resolved.source,
+          pathTemplate:
+            "GET …/automations/{automation_id}/runs/{run_id}/agents/{agent_id}/events?page_size=50",
+          succeeded: false,
+          errorType: e instanceof KognitosApiError ? "KognitosApiError" : "Error",
+          kognitosStatus: e instanceof KognitosApiError ? e.status : null,
+          error: e instanceof Error ? e.message : String(e),
+        },
+        null,
+        2,
+      ),
+    );
+  }
 }
 
 export type WorkspaceExceptionStateFilter =
@@ -92,15 +420,66 @@ export async function getWorkspaceException(
 }
 
 /**
- * Resolution thread — Kognitos plugin `exceptions-api.md`:
- * `GET …/automations/{auto}/runs/{run}/exceptions/{exception_id}/events`
+ * Resolution thread events.
+ *
+ * Primary path follows checked-in OpenAPI ListEvents:
+ * `GET …/automations/{auto}/runs/{run}/agents/{agent}/events`.
+ *
+ * The older exception-nested path is kept as a transition fallback because some
+ * previous Kognitos plugin notes referenced it.
  */
 export async function listExceptionResolutionEvents(options: {
   automationId: string;
   runId: string;
   exceptionIdShort: string;
+  excRaw?: Record<string, unknown>;
   pageSize?: number;
 }): Promise<{ raw: Record<string, unknown>; agentIdUsed: string | null }> {
+  try {
+    const { raw, agentIdUsed, agentIdSource } = await listAgentScopedResolutionEvents({
+      automationId: options.automationId,
+      runId: options.runId,
+      exceptionIdShort: options.exceptionIdShort,
+      excRaw: options.excRaw,
+      pageSize: options.pageSize,
+    });
+    if (IS_DEV_KOGNITOS_AUTH_LOG) {
+      console.log(
+        "[kognitos][dev] primary ListEvents source=agent-scoped",
+        JSON.stringify(
+          {
+            automationId: options.automationId,
+            runId: options.runId,
+            exceptionIdShort: options.exceptionIdShort,
+            agentIdUsed,
+            agentIdSource,
+          },
+          null,
+          2,
+        ),
+      );
+    }
+    return { raw, agentIdUsed };
+  } catch (e) {
+    if (IS_DEV_KOGNITOS_AUTH_LOG) {
+      console.error(
+        "[kognitos][dev] primary agent-scoped ListEvents failed; trying legacy exception-nested fallback",
+        JSON.stringify(
+          {
+            automationId: options.automationId,
+            runId: options.runId,
+            exceptionIdShort: options.exceptionIdShort,
+            errorType: e instanceof KognitosApiError ? "KognitosApiError" : "Error",
+            kognitosStatus: e instanceof KognitosApiError ? e.status : null,
+            error: e instanceof Error ? e.message : String(e),
+          },
+          null,
+          2,
+        ),
+      );
+    }
+  }
+
   const org = requireOrg();
   const ws = requireWorkspace();
   const auto = options.automationId.trim();
@@ -112,7 +491,7 @@ export async function listExceptionResolutionEvents(options: {
   const params = new URLSearchParams();
   params.set("page_size", String(pageSize));
   const path = `/api/v1/organizations/${encodeURIComponent(org)}/workspaces/${encodeURIComponent(ws)}/automations/${encodeURIComponent(auto)}/runs/${encodeURIComponent(run)}/exceptions/${encodeURIComponent(exc)}/events?${params}`;
-  const raw = await kognitosFetchJsonWithPat403Retry<Record<string, unknown>>(path);
+  const raw = await kognitosJsonAutomationScopedGet<Record<string, unknown>>(path);
   const ev = raw.events ?? raw.run_events ?? raw.runEvents;
   const normalized =
     Array.isArray(ev) && raw.events === undefined
@@ -252,7 +631,7 @@ export async function resolveAgentIdForExceptionReply(options: {
     const params = new URLSearchParams();
     params.set("page_size", "100");
     const path = `/api/v1/organizations/${encodeURIComponent(org)}/workspaces/${encodeURIComponent(ws)}/automations/${encodeURIComponent(auto)}/runs/${encodeURIComponent(run)}/events?${params}`;
-    const raw = await kognitosFetchJsonWithPat403Retry<Record<string, unknown>>(path);
+    const raw = await kognitosJsonAutomationScopedGet<Record<string, unknown>>(path);
     const runEvents =
       (raw.run_events as unknown[]) ??
       (raw.runEvents as unknown[]) ??

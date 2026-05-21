@@ -313,6 +313,26 @@ export async function getRun(
   return mapRunFromApiJson(data);
 }
 
+/**
+ * POST …/automations/{automationId}/runs/{runId}:continue — resume a run that
+ * was paused or is awaiting guidance. Body is intentionally empty per the
+ * `ContinueRunBody` schema in `openapi.yaml`. Returns the updated run JSON.
+ *
+ * Throws {@link KognitosApiError} on non-2xx so callers can branch on status.
+ */
+export async function continueRun(
+  runId: string,
+  automationId: string,
+): Promise<Record<string, unknown>> {
+  const org = requireOrg();
+  const ws = requireWorkspace();
+  const path = `/api/v1/organizations/${encodeURIComponent(org)}/workspaces/${encodeURIComponent(ws)}/automations/${encodeURIComponent(automationId)}/runs/${encodeURIComponent(runId)}:continue`;
+  return await kognitosFetchJson<Record<string, unknown>>(path, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
 export async function listRuns(options?: {
   pageSize?: number;
   filter?: string;

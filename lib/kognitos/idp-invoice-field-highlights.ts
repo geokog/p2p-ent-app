@@ -56,6 +56,26 @@ function shouldSkipFieldName(name: string): boolean {
   return false;
 }
 
+/**
+ * Element types that represent a single IDP "extracted field" with a value,
+ * page number, bounding box, and confidence. Kognitos' book-idp output now
+ * tags these as `document_field` (see Bumblebee `normalizeDocumentField` in
+ * `src/modules/idp/utils/normalize.ts`); the older `extracted_field` literal
+ * is kept for backward compatibility with previously stored payloads. Both
+ * normalize to the same `IdPdfFieldHighlight` shape downstream.
+ */
+const EXTRACTED_FIELD_ELEMENT_TYPES = new Set([
+  "extracted_field",
+  "document_field",
+]);
+
+export function isExtractedFieldElementType(
+  elementType: string | null | undefined,
+): boolean {
+  if (!elementType) return false;
+  return EXTRACTED_FIELD_ELEMENT_TYPES.has(elementType.trim().toLowerCase());
+}
+
 /** Map `dictionary.entries` to `key.text` → `entry.value` (protobuf-JSON row shape). */
 export function entryListToValueMap(entries: unknown): Map<string, unknown> {
   const m = new Map<string, unknown>();
@@ -340,8 +360,8 @@ function parseOneFieldItemWithTrace(
   };
 
   let skipReason: string | null = null;
-  if (elementType?.toLowerCase() !== "extracted_field") {
-    skipReason = `element_type is not extracted_field (got ${elementType ?? "undefined"})`;
+  if (!isExtractedFieldElementType(elementType)) {
+    skipReason = `element_type is not extracted_field/document_field (got ${elementType ?? "undefined"})`;
   } else if (!name || shouldSkipFieldName(name)) {
     skipReason = !name ? "missing name" : `name blocklisted or empty (${name})`;
   } else if (pageNumber == null || !Number.isFinite(pageNumber) || pageNumber < 1) {
@@ -508,7 +528,7 @@ export function getIdpHighlightPayloadDiagnostics(
           const elementType =
             readTextFromValueMapEntry(fm.get("element_type")) ??
             readTextFromValueMapEntry(fm.get("elementType"));
-          if (elementType?.toLowerCase() === "extracted_field") {
+          if (isExtractedFieldElementType(elementType)) {
             extractedFieldItemsCount += 1;
           }
         }

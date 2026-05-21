@@ -25,7 +25,7 @@ Highlights are **not** read from `GET /api/kognitos/runs/[id]` (mapped `Kognitos
    - Prefer `value.list.items`,
    - else `list.items`,
    - else `items` on the value object.
-5. Each list **item** is again `{ dictionary: { entries } }`. Parser keeps rows where **`element_type`** (or `elementType`) text is **`extracted_field`** (case-insensitive).
+5. Each list **item** is again `{ dictionary: { entries } }`. Parser keeps rows where **`element_type`** (or `elementType`) text is **`extracted_field`** (legacy) or **`document_field`** (current `book-idp` shape; see [`isExtractedFieldElementType`](../lib/kognitos/idp-invoice-field-highlights.ts) and Bumblebee's `normalizeDocumentField` in `src/modules/idp/utils/normalize.ts`). Match is case-insensitive. If Kognitos adds a new alias, extend `EXTRACTED_FIELD_ELEMENT_TYPES`; otherwise the diagnostics route will silently log `extractedFieldItemsCount: 0` and the overlay will render no boxes.
 
 Per-field data is read from each item’s `entries` map (via [`entryListToValueMap`](../lib/kognitos/idp-invoice-field-highlights.ts)):
 

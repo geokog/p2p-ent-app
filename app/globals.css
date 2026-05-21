@@ -2,6 +2,9 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
+/* DM Sans + DM Mono are loaded via `next/font/google` in app/layout.tsx;
+   they expose `--font-dm-sans` and `--font-dm-mono` on the <html> element. */
+
 /* PP Neue Montreal Font Family */
 @font-face {
   font-family: 'PP Neue Montreal';
@@ -54,8 +57,12 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-  --font-sans: 'PP Neue Montreal', sans-serif;
-  --font-mono: 'IBM Plex Mono', monospace;
+  --font-sans:
+    var(--font-dm-sans), 'DM Sans', 'PP Neue Montreal', -apple-system,
+    BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono:
+    var(--font-dm-mono), 'DM Mono', 'IBM Plex Mono', ui-monospace,
+    SFMono-Regular, Menlo, monospace;
   --font-serif: ui-serif, Georgia, serif;
   --tracking-normal: 0.01em;
 
@@ -430,5 +437,87 @@
     line-height: 2rem;
     font-weight: 500;
     letter-spacing: 0.01em;
+  }
+}
+
+/* ── Sidebar v2: CSS hover tooltip (rail-only) ───────────────────
+   Used by the icon-only 56px sidebar. Reads the trigger's
+   `title` attribute via attr() so labels stay declarative. */
+[data-sidebar-tip] {
+  position: relative;
+}
+[data-sidebar-tip]:hover::after,
+[data-sidebar-tip]:focus-visible::after {
+  content: attr(title);
+  position: absolute;
+  left: 46px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(29, 29, 31, 0.88);
+  color: #ffffff;
+  font-size: 11px;
+  border-radius: 7px;
+  padding: 4px 9px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 50;
+}
+
+/* ── Exception-handling v2 prototype: shell + entrance animations ─ */
+@keyframes ehv2-shell-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes ehv2-row-in {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+@keyframes ehv2-card-up {
+  from {
+    opacity: 0;
+    transform: translateY(7px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.ehv2-shell-in {
+  animation: ehv2-shell-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.ehv2-row-in {
+  animation: ehv2-row-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.ehv2-card-up {
+  animation: ehv2-card-up 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes ehv2-pulse {
+  0% {
+    box-shadow: 0 0 0 0 currentColor;
+  }
+  70% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ehv2-shell-in,
+  .ehv2-row-in,
+  .ehv2-card-up {
+    animation: none;
   }
 }

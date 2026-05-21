@@ -30,7 +30,12 @@ export interface RoleConfig {
 
 export interface NavItem {
   label: string;
-  href: string;
+  /**
+   * Destination for this nav item. Omit (or leave empty) for **group
+   * placeholders** that exist only to host `children` and should not be
+   * clickable themselves (e.g. a "test" header above experimental sub-pages).
+   */
+  href?: string;
   icon: string; // Lucide icon name
   roles?: string[]; // if set, only these roles see it; omit for all
   /** Indented links shown under this item (e.g. Worklist → Test). */
@@ -80,9 +85,11 @@ export const DOMAIN = {
         "/vendors",
         "/expert-queue",
         "/exception-handling",
+        "/exception-handling-v2",
         "/logistics",
         "/notifications",
         "/setup-pending",
+        "/developer",
       ],
       actions: ["create", "submit"],
     },
@@ -97,10 +104,12 @@ export const DOMAIN = {
         "/vendors",
         "/expert-queue",
         "/exception-handling",
+        "/exception-handling-v2",
         "/logistics",
         "/rules",
         "/notifications",
         "/setup-pending",
+        "/developer",
       ],
       actions: ["approve", "reject", "assign", "escalate"],
     },
@@ -115,11 +124,13 @@ export const DOMAIN = {
         "/vendors",
         "/expert-queue",
         "/exception-handling",
+        "/exception-handling-v2",
         "/logistics",
         "/rules",
         "/notifications",
         "/settings",
         "/setup-pending",
+        "/developer",
       ],
       actions: ["assign"],
     },
@@ -134,24 +145,46 @@ export const DOMAIN = {
 
   // ── Navigation ────────────────────────────────────────────────
   navItems: [
-    { label: "Dashboard", href: "/dashboard", icon: "BarChart3" },
-    { label: "Expert Queue", href: "/expert-queue", icon: "LifeBuoy" },
+    { label: "Dashboard", href: "/dashboard", icon: "Grid2x2" },
+    { label: "Expert Queue", href: "/expert-queue", icon: "Users" },
     {
       label: "Exceptions",
       href: "/exception-handling",
-      icon: "AlertTriangle",
+      icon: "TriangleAlert",
     },
-    { label: "Vendors", href: "/vendors", icon: "Store" },
-    { label: "Logistics", href: "/logistics", icon: "Truck" },
-    { label: "Rules", href: "/rules", icon: "BookOpen" },
     {
-      label: "Worklist",
-      href: "/",
-      icon: "ClipboardList",
+      label: "Exceptions v2",
+      href: "/exception-handling-v2",
+      icon: "Sparkles",
+    },
+    {
+      label: "test",
+      icon: "FlaskConical",
       children: [
-        { label: "Test", href: "/worklist/test", icon: "FlaskConical" },
+        {
+          label: "doc-preview",
+          href: "/exception-handling-v2/doc-preview",
+          icon: "FileText",
+        },
+        {
+          label: "chat",
+          href: "/exception-handling-v2/chat",
+          icon: "FileText",
+        },
+        {
+          label: "B-Automation",
+          href: "/vendors",
+          icon: "Truck",
+        },
+        {
+          label: "Developer",
+          href: "/developer",
+          icon: "Code2",
+        },
       ],
     },
+    { label: "Rules", href: "/rules", icon: "List" },
+    { label: "Worklist", href: "/", icon: "ClipboardCheck" },
     { label: "Notifications", href: "/notifications", icon: "Bell" },
     { label: "Settings", href: "/settings", icon: "Settings", roles: ["admin", "manager"] },
   ] satisfies NavItem[],

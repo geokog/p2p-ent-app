@@ -15,6 +15,7 @@ import {
   ChevronDown,
   Download,
   Filter,
+  Info,
   Layers2,
   Maximize2,
   PanelRight,
@@ -796,6 +797,13 @@ export function InvoicePdfHighlightViewer({ pdfUrl, runId }: Props) {
   const [activePage, setActivePage] = useState(1);
   const [parsedHighlights, setParsedHighlights] = useState<IdPdfFieldHighlight[]>([]);
   const [payloadError, setPayloadError] = useState<string | null>(null);
+  /**
+   * Tracks whether the run-payload fetch has settled. We use this to
+   * distinguish "still loading" from "loaded with zero highlights" so
+   * the empty-state banner only shows when we know the run truly has
+   * no IDP fields (vs. flashing while the request is in flight).
+   */
+  const [payloadLoading, setPayloadLoading] = useState(true);
   const [pdfDoc, setPdfDoc] = useState<PDFDocumentProxy | null>(null);
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [pdfLoading, setPdfLoading] = useState(true);
@@ -876,6 +884,7 @@ export function InvoicePdfHighlightViewer({ pdfUrl, runId }: Props) {
   useEffect(() => {
     let cancelled = false;
     setPayloadError(null);
+    setPayloadLoading(true);
     void (async () => {
       try {
         const res = await fetch(
@@ -900,6 +909,8 @@ export function InvoicePdfHighlightViewer({ pdfUrl, runId }: Props) {
           setParsedHighlights([]);
           setPayloadError("Could not load run payload.");
         }
+      } finally {
+        if (!cancelled) setPayloadLoading(false);
       }
     })();
     return () => {
@@ -1070,6 +1081,38 @@ export function InvoicePdfHighlightViewer({ pdfUrl, runId }: Props) {
             </aside>
             {/* Center column: PDF scrolls above; toolbar is a fixed strip below (not inside overflow). */}
             <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              {/*
+                IDP empty-state banner. Surfaces "no extracted fields"
+                explicitly at the top of the workspace as soon as both
+                the PDF and the run payload have settled with zero
+                highlights — so chat-launched runs without IDP output
+                don't look "broken" to the operator (the PDF renders,
+                the highlight toggle simply has nothing to highlight).
+              */}
+              {!payloadLoading && !payloadError && parsedHighlights.length === 0 ? (
+                <div
+                  role="status"
+                  aria-live="polite"
+                  className="shrink-0 border-b border-white/[0.06] bg-zinc-900/80 px-4 py-2"
+                >
+                  <div className="flex items-start gap-2 text-zinc-300">
+                    <Info
+                      className="mt-[1px] size-3.5 shrink-0 text-zinc-400"
+                      aria-hidden
+                    />
+                    <p className="text-[12px] leading-snug">
+                      <span className="font-medium text-zinc-200">
+                        No extracted fields for this run.
+                      </span>{" "}
+                      <span className="text-zinc-400">
+                        The document is shown without bounding boxes or a
+                        confidence panel because this run has no IDP
+                        output.
+                      </span>
+                    </p>
+                  </div>
+                </div>
+              ) : null}
               <div
                 ref={workspaceRef}
                 className="relative min-h-0 min-w-0 flex-1 overflow-auto overflow-x-auto bg-[#323234]"
@@ -1248,11 +1291,6 @@ export function InvoicePdfHighlightViewer({ pdfUrl, runId }: Props) {
               />
             ) : null}
           </div>
-        ) : null}
-        {!pdfLoading && !pdfError && pdfDoc && parsedHighlights.length === 0 ? (
-          <p className="shrink-0 px-4 py-2 text-xs text-zinc-500">
-            No extracted-field highlights were found in this run&apos;s IDP output.
-          </p>
         ) : null}
       </div>
     </TooltipProvider>

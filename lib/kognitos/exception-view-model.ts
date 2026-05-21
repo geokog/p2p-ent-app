@@ -154,11 +154,40 @@ export function mapExceptionToDetail(
   };
 }
 
+/** Parsed multiple-choice style prompt from agent content or tool input (best-effort). */
+export type ExceptionStructuredChoiceDto = {
+  prompt: string;
+  options: string[];
+};
+
+export type ExceptionEventState =
+  | "STATE_UNSPECIFIED"
+  | "STATE_STREAMING"
+  | "STATE_COMPLETE";
+
 export type ExceptionEventDto = {
+  /**
+   * Stable identifier derived from the Kognitos event resource name's last
+   * path segment (e.g. `.../events/{event_id}`). Falls back to a synthetic id
+   * built from `createTime` when `name` is missing so callers can still key
+   * messages off this value.
+   */
+  id: string;
+  /** Full Kognitos event resource name when present (`.../events/{event_id}`). */
+  resourceName: string | null;
+  state: ExceptionEventState;
   createTime: string | null;
   kind: string;
   summary: string;
   detail: string | null;
+  /** Display name for `tool_call_request` events; preserved verbatim from Kognitos. */
+  toolDisplayName?: string;
+  /** Stable id linking `tool_call_request` to its matching `tool_call_result`. */
+  toolCallId?: string;
+  /** For `completion_response` events that carry an error payload. */
+  completionError?: string;
+  /** Present when the event looks like the agent asking the user to pick from a list. */
+  structuredChoice?: ExceptionStructuredChoiceDto;
 };
 
 function eventTextFromUserMessage(o: Record<string, unknown>): string | null {
@@ -169,14 +198,214 @@ function eventTextFromAgentMessage(o: Record<string, unknown>): string | null {
   return readString(o.content) ?? null;
 }
 
-function mapOneEvent(raw: Record<string, unknown>): ExceptionEventDto {
+const AGENT_LIST_LINE =
+  /^\s*(?:(\d+)[\.)]\s+|[-*•]\s+)(.+)$/;
+
+/**
+ * Detects a trailing numbered or bullet list (2+ items) in agent markdown/text.
+ * Prompt is the text above the list block.
+ */
+export function extractStructuredChoiceFromAgentContent(
+  text: string,
+): ExceptionStructuredChoiceDto | null {
+  const t = text.trim();
+  if (t.length < 8) return null;
+  const lines = t.split(/\r?\n/);
+  let i = lines.length - 1;
+  const options: string[] = [];
+  while (i >= 0) {
+    const trimmed = lines[i].trim();
+    if (trimmed === "") {
+      if (options.length === 0) {
+        i -= 1;
+        continue;
+      }
+      i -= 1;
+      continue;
+    }
+    const m = trimmed.match(AGENT_LIST_LINE);
+    if (m) {
+      const opt = m[2].trim();
+      if (opt) options.unshift(opt);
+      i -= 1;
+    } else {
+      break;
+    }
+  }
+  if (options.length < 2) return null;
+  const deduped = dedupeChoiceOptions(options);
+  if (deduped.length < 2) return null;
+  const prompt = lines.slice(0, i + 1).join("\n").trim();
+  return {
+    prompt: prompt.length > 0 ? prompt : "Select an option:",
+    options: deduped,
+  };
+}
+
+function dedupeChoiceOptions(options: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const o of options) {
+    const k = o.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(o);
+  }
+  return out;
+}
+
+function optionStringsFromArray(arr: unknown[]): string[] {
+  const out: string[] = [];
+  for (const x of arr) {
+    if (typeof x === "string" && x.trim()) {
+      out.push(x.trim());
+      continue;
+    }
+    if (x && typeof x === "object" && !Array.isArray(x)) {
+      const o = x as Record<string, unknown>;
+      const label =
+        readString(o.label) ??
+        readString(o.name) ??
+        readString(o.title) ??
+        readString(o.value);
+      if (label?.trim()) out.push(label.trim());
+    }
+  }
+  return dedupeChoiceOptions(out);
+}
+
+function extractStructuredChoiceFromObject(
+  o: Record<string, unknown>,
+  depth: number,
+): ExceptionStructuredChoiceDto | null {
+  if (depth > 8) return null;
+  const promptKeys = [
+    "question",
+    "prompt",
+    "message",
+    "title",
+    "instruction",
+    "text",
+    "query",
+    "ask",
+  ] as const;
+  let prompt = "";
+  for (const k of promptKeys) {
+    const v = o[k];
+    if (typeof v === "string" && v.trim()) {
+      prompt = v.trim();
+      break;
+    }
+  }
+  const arrayKeys = [
+    "options",
+    "choices",
+    "values",
+    "candidates",
+    "suggestions",
+    "items",
+    "alternatives",
+    "list",
+  ] as const;
+  for (const k of arrayKeys) {
+    const v = o[k];
+    if (!Array.isArray(v) || v.length < 2) continue;
+    const opts = optionStringsFromArray(v);
+    if (opts.length >= 2) {
+      return {
+        prompt: prompt.length > 0 ? prompt : "Select an option:",
+        options: opts,
+      };
+    }
+  }
+  for (const v of Object.values(o)) {
+    if (v && typeof v === "object" && !Array.isArray(v)) {
+      const inner = extractStructuredChoiceFromObject(v as Record<string, unknown>, depth + 1);
+      if (inner) {
+        if (!inner.prompt || inner.prompt === "Select an option:") {
+          if (prompt) return { ...inner, prompt };
+        }
+        return inner;
+      }
+    }
+    if (Array.isArray(v) && v.length >= 2) {
+      const opts = optionStringsFromArray(v);
+      if (opts.length >= 2) {
+        return {
+          prompt: prompt.length > 0 ? prompt : "Select an option:",
+          options: opts,
+        };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Parses tool-call `input` JSON (or nested JSON string) for common choice shapes.
+ */
+export function extractStructuredChoiceFromToolInputJson(
+  jsonStr: string,
+): ExceptionStructuredChoiceDto | null {
+  const trimmed = jsonStr.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed) as unknown;
+  } catch {
+    return null;
+  }
+  if (Array.isArray(parsed)) {
+    const opts = optionStringsFromArray(parsed);
+    if (opts.length >= 2) return { prompt: "Select an option:", options: opts };
+    return null;
+  }
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    return extractStructuredChoiceFromObject(parsed as Record<string, unknown>, 0);
+  }
+  return null;
+}
+
+/** Newest matching event wins (events are oldest-first after mapListEventsResponse). */
+export function findLatestStructuredAgentChoice(
+  events: ExceptionEventDto[],
+): ExceptionStructuredChoiceDto | null {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const sc = events[i].structuredChoice;
+    if (sc && sc.options.length >= 2) return sc;
+  }
+  return null;
+}
+
+function eventIdFromResourceName(name: string): string | null {
+  const parts = name.split("/").filter(Boolean);
+  const i = parts.indexOf("events");
+  if (i >= 0 && i + 1 < parts.length) return parts[i + 1] ?? null;
+  return null;
+}
+
+function normalizeEventState(raw: unknown): ExceptionEventState {
+  const s = readString(raw)?.toUpperCase() ?? "";
+  if (s === "STATE_STREAMING") return "STATE_STREAMING";
+  if (s === "STATE_COMPLETE") return "STATE_COMPLETE";
+  return "STATE_UNSPECIFIED";
+}
+
+function mapOneEvent(raw: Record<string, unknown>, fallbackIndex: number): ExceptionEventDto {
   const createTime =
     readString(raw.create_time ?? raw.createTime) ?? null;
+  const resourceName = readString(raw.name) ?? null;
+  const state = normalizeEventState(raw.state);
+  const id =
+    (resourceName ? eventIdFromResourceName(resourceName) : null) ??
+    `${createTime ?? "t"}-${fallbackIndex}`;
+  const base = { id, resourceName, state, createTime };
+
   const um = readRecord(raw.user_message ?? raw.userMessage);
   if (um) {
     const t = eventTextFromUserMessage(um);
     return {
-      createTime,
+      ...base,
       kind: "user",
       summary: t ? t.slice(0, 160) : "User message",
       detail: t ?? null,
@@ -185,32 +414,50 @@ function mapOneEvent(raw: Record<string, unknown>): ExceptionEventDto {
   const am = readRecord(raw.agent_message ?? raw.agentMessage);
   if (am) {
     const t = eventTextFromAgentMessage(am);
+    const structuredChoice = t ? extractStructuredChoiceFromAgentContent(t) : null;
     return {
-      createTime,
+      ...base,
       kind: "agent",
       summary: t ? t.slice(0, 160) : "Agent message",
       detail: t ?? null,
+      ...(structuredChoice ? { structuredChoice } : {}),
     };
   }
   const tc = readRecord(raw.tool_call_request ?? raw.toolCallRequest);
   if (tc) {
     const dn = readString(tc.display_name ?? tc.displayName) ?? "Tool call";
-    return { createTime, kind: "tool", summary: dn, detail: readString(tc.input) ?? null };
+    const toolCallId = readString(tc.tool_call_id ?? tc.toolCallId);
+    const inputStr = readString(tc.input) ?? null;
+    const fromJson = inputStr ? extractStructuredChoiceFromToolInputJson(inputStr) : null;
+    const structuredChoice =
+      fromJson ??
+      (inputStr ? extractStructuredChoiceFromAgentContent(inputStr) : null);
+    return {
+      ...base,
+      kind: "tool",
+      summary: dn,
+      detail: inputStr,
+      toolDisplayName: dn,
+      ...(toolCallId ? { toolCallId } : {}),
+      ...(structuredChoice ? { structuredChoice } : {}),
+    };
   }
   const tr = readRecord(raw.tool_call_result ?? raw.toolCallResult);
   if (tr) {
+    const toolCallId = readString(tr.tool_call_id ?? tr.toolCallId);
     return {
-      createTime,
+      ...base,
       kind: "tool_result",
       summary: "Tool result",
       detail: readString(tr.result) ?? null,
+      ...(toolCallId ? { toolCallId } : {}),
     };
   }
   const sm = readRecord(raw.system_message ?? raw.systemMessage);
   if (sm) {
     const t = readString(sm.content);
     return {
-      createTime,
+      ...base,
       kind: "system",
       summary: t ? t.slice(0, 120) : "System",
       detail: t ?? null,
@@ -220,7 +467,7 @@ function mapOneEvent(raw: Record<string, unknown>): ExceptionEventDto {
   if (th) {
     const t = readString(th.content);
     return {
-      createTime,
+      ...base,
       kind: "thinking",
       summary: "Thinking",
       detail: t ?? null,
@@ -231,14 +478,15 @@ function mapOneEvent(raw: Record<string, unknown>): ExceptionEventDto {
     const err = readString(cr.error);
     const ok = readString(cr.content);
     return {
-      createTime,
+      ...base,
       kind: "completion",
       summary: err ? `Completion error` : "Completion",
       detail: err ?? ok ?? null,
+      ...(err ? { completionError: err } : {}),
     };
   }
   return {
-    createTime,
+    ...base,
     kind: "unknown",
     summary: "Event",
     detail: JSON.stringify(raw).slice(0, 500),
@@ -251,11 +499,30 @@ export function mapListEventsResponse(
 ): ExceptionEventDto[] {
   const list = (raw.events as unknown[]) ?? [];
   const out: ExceptionEventDto[] = [];
+  let idx = 0;
   for (const item of list) {
     const r = readRecord(item);
-    if (r) out.push(mapOneEvent(r));
+    if (r) {
+      out.push(mapOneEvent(r, idx));
+      idx += 1;
+    }
   }
   return out.reverse();
+}
+
+/**
+ * Map a single streaming event payload (one NDJSON line from `StreamEvents`).
+ * The wire format wraps the event under a `result` key so we unwrap when needed.
+ */
+export function mapStreamEventLine(
+  raw: Record<string, unknown>,
+): ExceptionEventDto | null {
+  const evtRaw =
+    (readRecord(raw.event) ??
+      readRecord((raw as { result?: unknown }).result) ??
+      raw) as Record<string, unknown>;
+  if (!evtRaw) return null;
+  return mapOneEvent(evtRaw, 0);
 }
 
 export type ExceptionRunContextDto = {
